@@ -1,12 +1,22 @@
 # Debezium connector
 
-Registered against Kafka Connect once the stack is up:
+The `connect-init` service registers this on every `make up`, so there is normally nothing to
+do by hand. To re-apply it yourself:
 
 ```bash
-curl -sS -X PUT -H 'Content-Type: application/json' \
+curl --fail -sS -X PUT -H 'Content-Type: application/json' \
   --data @infra/connect/subscriptions-source.json \
   http://localhost:8083/connectors/app-cdc/config
 ```
+
+This file is the bare **config object**, not a `{"name": ..., "config": {...}}` wrapper, because
+`PUT /connectors/{name}/config` takes the config alone and is idempotent — it creates or updates
+in place. Posting the wrapper to this endpoint fails with a deserialisation 500, and without
+`--fail` curl reports that as success.
+
+The destination topics are created by `redpanda-init`, not by the broker: auto-create is off, and
+a connector whose topics do not exist reports `RUNNING` while every produce fails with
+`UNKNOWN_TOPIC_OR_PARTITION` and the replication slot retains WAL indefinitely.
 
 Settings that are load-bearing rather than default, and why:
 

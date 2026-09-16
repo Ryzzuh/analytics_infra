@@ -1,40 +1,37 @@
 {
-  "name": "app-cdc",
-  "config": {
-    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
-    "plugin.name": "pgoutput",
-    "database.hostname": "postgres-app",
-    "database.port": "5432",
-    "database.user": "${env:APP_DB_USER}",
-    "database.password": "${env:APP_DB_PASSWORD}",
-    "database.dbname": "app",
-    "topic.prefix": "cdc.app",
+  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+  "plugin.name": "pgoutput",
+  "database.hostname": "postgres-app",
+  "database.port": "5432",
+  "database.user": "${env:APP_DB_USER}",
+  "database.password": "${env:APP_DB_PASSWORD}",
+  "database.dbname": "app",
+  "topic.prefix": "cdc.app",
 
-    "publication.name": "analytics_cdc",
-    "publication.autocreate.mode": "disabled",
-    "slot.name": "analytics_cdc",
+  "publication.name": "analytics_cdc",
+  "publication.autocreate.mode": "disabled",
+  "slot.name": "analytics_cdc",
 
-    "table.include.list": "public.accounts,public.users,public.plans,public.subscriptions,public.invoices,public.support_tickets",
+  "table.include.list": "public.accounts,public.users,public.plans,public.subscriptions,public.invoices,public.support_tickets",
 
-    "heartbeat.interval.ms": "10000",
-    "heartbeat.action.query": "UPDATE public.debezium_heartbeat SET beat_at = now() WHERE id = 1",
+  "heartbeat.interval.ms": "10000",
+  "heartbeat.action.query": "UPDATE public.debezium_heartbeat SET beat_at = now() WHERE id = 1",
 
-    "signal.data.collection": "public.debezium_signal",
-    "signal.enabled.channels": "source",
-    "incremental.snapshot.chunk.size": "1024",
+  "signal.data.collection": "public.debezium_signal",
+  "signal.enabled.channels": "source",
+  "incremental.snapshot.chunk.size": "1024",
 
-    "snapshot.mode": "initial",
-    "tombstones.on.delete": "true",
+  "snapshot.mode": "initial",
+  "tombstones.on.delete": "true",
 
-    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-    "key.converter.schemas.enable": "false",
-    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-    "value.converter.schemas.enable": "false",
+  "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+  "key.converter.schemas.enable": "false",
+  "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+  "value.converter.schemas.enable": "false",
 
-    "time.precision.mode": "connect",
-    "decimal.handling.mode": "string",
+  "time.precision.mode": "connect",
+  "decimal.handling.mode": "string",
 
-    "errors.tolerance": "none",
-    "errors.log.enable": "true"
-  }
+  "errors.tolerance": "none",
+  "errors.log.enable": "true"
 }

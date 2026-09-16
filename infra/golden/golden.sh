@@ -84,8 +84,11 @@ cmd_restore() {
   # snapshot.mode=never: the restored volumes already contain the snapshot, and re-running it
   # would duplicate the entire source database on top of itself.
   log "registering connector at the restored slot position"
-  jq '.config["snapshot.mode"] = "never"' infra/connect/subscriptions-source.json \
-    | curl -sS -X PUT -H 'Content-Type: application/json' --data @- \
+  # The file is the bare config object, so the override is a merge and the result can go
+  # straight to the config endpoint. --fail is not optional: curl exits 0 on an HTTP 500, and a
+  # restore that silently failed to register the connector looks identical to one that worked.
+  jq '. + {"snapshot.mode": "never"}' infra/connect/subscriptions-source.json \
+    | curl --fail -sS -X PUT -H 'Content-Type: application/json' --data @- \
         http://localhost:8083/connectors/app-cdc/config > /dev/null
 
   log "starting the rest of the stack"

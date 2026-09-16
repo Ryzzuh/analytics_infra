@@ -48,13 +48,25 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     # Topics are created explicitly rather than auto-created on first produce, so partition
     # count and retention are a deliberate choice rather than a default.
+    #
+    # The CDC topics have to be here for the same reason. Disabling broker auto-create (so a
+    # typo could not silently make a 1-partition topic) also stopped anything from creating
+    # Debezium's destination topics: the connector then reports RUNNING while every produce
+    # fails with UNKNOWN_TOPIC_OR_PARTITION and the replication slot retains WAL indefinitely.
+    # Three partitions rather than six — CDC volume is far below product events, and ordering
+    # that matters is per-key within a table, which Debezium's PK keying already guarantees.
+    # The heartbeat topic carries one key and gets one partition.
     command: >
       'for t in session feature_usage lifecycle billing_ui; do
          rpk topic create product.$$t -p 6 -r 1 --brokers redpanda:9092 || true;
          rpk topic create product.$$t.backfill -p 6 -r 1 --brokers redpanda:9092
            -c retention.ms=43200000 || true;
        done;
-       rpk topic create billing.webhooks -p 3 -r 1 --brokers redpanda:9092 || true'
+       rpk topic create billing.webhooks -p 3 -r 1 --brokers redpanda:9092 || true;
+       for t in accounts users plans subscriptions invoices support_tickets; do
+         rpk topic create cdc.app.public.$$t -p 3 -r 1 --brokers redpanda:9092 || true;
+       done;
+       rpk topic create __debezium-heartbeat.cdc.app -p 1 -r 1 --brokers redpanda:9092 || true'
     restart: "no"
 
   postgres-warehouse:
@@ -237,6 +249,28 @@ services:
       COLLECTOR_URL: http://collector:8000
       SIM_ACCOUNTS: "${SIM_ACCOUNTS:-500}"
       SIM_RATE: "${SIM_RATE:-2}"
+
+  # Registering the connector was documented in infra/connect/README.md and done by hand, which
+  # meant `make up` produced a stack with no CDC at all: slot absent, topics absent, change log
+  # empty. A step the system cannot start without does not belong in prose.
+  #
+  # PUT .../config (rather than POST /connectors) is the idempotent form: it creates the
+  # connector or updates it in place, so re-running this on every `up` converges instead of
+  # failing with 409. It takes the bare config object, which is why the JSON file holds exactly
+  # that — the {name, config} wrapper the old README posted here is rejected outright.
+  connect-init:
+    image: curlimages/curl:8.11.1
+    depends_on:
+      connect: {condition: service_healthy}
+    volumes: ["../connect/subscriptions-source.json:/connector.json:ro"]
+    # --fail matters: without it curl exits 0 on a 4xx/5xx and a rejected connector config
+    # looks exactly like a successful registration.
+    command: >
+      --fail --silent --show-error -X PUT
+      -H "Content-Type: application/json"
+      --data @/connector.json
+      http://connect:8083/connectors/app-cdc/config
+    restart: on-failure
 
   # The CDC source. Without this the `accounts` and `subscriptions` tables are never written
   # to, so Debezium captures nothing and the whole CDC half of the platform — the change log,
