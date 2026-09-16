@@ -5,10 +5,16 @@ data, duplicates, schema drift, connector outages, crashes mid-commit, erasure r
 
 Full design: [SPEC.md](SPEC.md). Decisions: [docs/adr](docs/adr).
 
-> **Status: M8 (Console and chaos) — the build is complete.** A status page anyone can read, four
-> chaos scenarios anyone with the passcode can run and recover, and a write-up of each. The one
-> thing still outstanding is bringing the live instance up, which costs money and is therefore a
-> human decision — see [docs/deployment.md](docs/deployment.md).
+> **Status: complete and running locally.** All eight milestones built, and the stack has now
+> been run for real: simulator → collector → Redpanda → loader → warehouse, Debezium CDC into
+> SCD2, and a full dbt build producing churn scores. The remaining step is the public instance,
+> which costs money and is therefore a human decision — see
+> [docs/deployment.md](docs/deployment.md).
+>
+> Running it found four defects the 199 tests could not: a PyPI package shadowing our own
+> `loader` inside the image, Kafka Connect not resolving `${env:...}` without a config provider,
+> Redpanda auto-creating one-partition topics that silently discarded the configured layout, and
+> a loader CLI that could not drive the CDC path at all.
 
 ## The idea in one paragraph
 
