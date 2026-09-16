@@ -29,15 +29,27 @@ jobs:
           python-version: "3.12"
       # Catches the most common breakage: a DAG that fails to import, or a cycle. Airflow is
       # installed only here, so the fast test job stays light.
-      - run: pip install "apache-airflow==3.0.3" ./platform/loader
+      # Same version the image pins, so a DAG that parses here parses there. (Locally this
+      # job can only run on 3.0.3: newer Airflow needs libcst >= 1.8.2, which ships no
+      # x86_64-macOS wheel.)
+      - run: pip install "apache-airflow==3.2.2" "astronomer-cosmos>=1.15" "dbt-postgres>=1.8" ./platform/loader
+      - name: Build the dbt manifest the transform DAG renders from
+        run: cd dbt && dbt parse --profiles-dir . --project-dir . --target local
       - name: DagBag import check
         env:
           WAREHOUSE_DSN: postgresql://unused
+          APP_DSN: postgresql://unused
+          DBT_PROJECT_DIR: dbt
+          DBT_MANIFEST_PATH: dbt/target/manifest.json
         run: |
           python - <<'PY'
           from airflow.models.dagbag import DagBag
           bag = DagBag(dag_folder="airflow/dags", include_examples=False)
           assert not bag.import_errors, bag.import_errors
           assert bag.dags, "no DAGs found"
-          print(f"{len(bag.dags)} DAG(s) imported cleanly")
+          # The Cosmos-rendered DAG must have real tasks: an empty render means the manifest
+          # was missing or stale, which would otherwise pass as "imported fine".
+          transform = bag.dags["transform"]
+          assert len(transform.tasks) > 10, f"transform rendered only {len(transform.tasks)} tasks"
+          print(f"{len(bag.dags)} DAG(s) imported cleanly; transform has {len(transform.tasks)} tasks")
           PY

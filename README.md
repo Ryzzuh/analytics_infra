@@ -5,10 +5,10 @@ data, duplicates, schema drift, connector outages, crashes mid-commit, erasure r
 
 Full design: [SPEC.md](SPEC.md). Decisions: [docs/adr](docs/adr).
 
-> **Status: M2 (CDC).** M1's event path plus: the source OLTP schema with its publication and
-> replica identity, Debezium change events into `raw.cdc_changes`, SCD2 dimensions derived from
-> the change log, and a reconciliation test against an independent snapshot.
-> Next: M3 (full dbt layering, marts, `mart_account_health`).
+> **Status: M3 (warehouse).** M1's event path and M2's CDC path, now modelled end to end:
+> `raw → staging → core → marts`, with `mart_account_health` producing the churn score that
+> reverse ETL will push back to the product, and dbt rendered into Airflow tasks by Cosmos.
+> Next: M4 (12-month history replay, backfill topics, golden snapshot).
 
 ## The idea in one paragraph
 
@@ -22,7 +22,7 @@ the chaos scenarios that prove the failure paths behave.
 
 ```bash
 make install     # uv workspace
-make test        # 56 tests: embedded Postgres (incl. logical replication) + real dbt runs
+make test        # 62 tests: embedded Postgres (incl. logical replication) + real dbt runs
 make up          # core stack (~4 GB): Redpanda, warehouse, Airflow, collector, simulator
 ```
 
@@ -84,7 +84,7 @@ load exactly once.
 | `services/collector/` | FastAPI event collector; validates the envelope only |
 | `services/simulator/` | Synthetic SaaS traffic, including duplicates and late events |
 | `airflow/dags/` | Micro-batch load DAGs |
-| `dbt/` | `staging` → `core` (SCD2) → (`marts` from M3) |
+| `dbt/` | `staging` → `core` (SCD2, facts, date spine) → `marts` |
 | `db/app/ddl/` | Source OLTP schema, publication and replica identity |
 | `infra/connect/` | Debezium connector config, with the reasoning per setting |
 | `db/warehouse/ddl/` | `ops` (ledger, DLQ, erasure) and `raw` schemas |
@@ -96,6 +96,9 @@ load exactly once.
   broker's offsets are only a metric.
 - **[ADR 0002](docs/adr/0002-scd2-from-the-change-log.md)** — why history comes from the change
   log rather than dbt snapshots, and why it is dated by business time.
+- **[`mart_account_health`](dbt/models/marts/mart_account_health.sql)** — the churn score, with
+  every component carrying its own reason, because a score nobody can explain cannot be acted
+  on by the product that receives it.
 - **[SPEC.md §5.2](SPEC.md)** — why `raw` is partitioned by *load* date, and why that does not
   help erasure.
 - **[SPEC.md §6.2](SPEC.md)** — why backfill uses separate topics rather than a "backfill mode"

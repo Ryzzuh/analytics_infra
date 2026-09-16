@@ -6,15 +6,8 @@
 -- sharing one is always a redelivery, never two real changes. This is the CDC equivalent of
 -- the event_id dedup in stg_product_events.
 
-with deduped as (
-    select
-        *,
-        row_number() over (
-            partition by pk, source_lsn
-            order by loaded_at, kafka_offset
-        ) as arrival_rank
-    from {{ source('raw', 'cdc_changes') }}
-    where source_table = 'subscriptions'
+with changes as (
+    {{ cdc_stream('subscriptions') }}
 ),
 
 typed as (
@@ -27,11 +20,9 @@ typed as (
         effective_at,
         loaded_at,
         source_path,
-        -- For a delete the current values are in `before`: `after` is null by definition.
-        coalesce(after, before)                             as row_state,
+        row_state,
         before
-    from deduped
-    where arrival_rank = 1
+    from changes
 )
 
 select

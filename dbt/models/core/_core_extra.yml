@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: dim_account
+    columns:
+      - name: account_id
+        tests: [not_null, unique]
+
+  - name: dim_date
+    columns:
+      - name: date_day
+        tests: [not_null, unique]
+
+  - name: fct_subscription_daily
+    description: One row per subscription per day, holding the state it ended the day in.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [date_day, subscription_id]
+
+  - name: fct_account_activity_daily
+    description: Daily product-usage aggregate per account, rebuilt over the lateness window.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [account_id, activity_date]
+
+  - name: fct_invoices
+    columns:
+      - name: invoice_id
+        tests: [not_null, unique]

@@ -1,0 +1,44 @@
+version: 2
+
+models:
+  - name: mart_account_health
+    description: >
+      Churn-risk score per account, with the reasons behind it. This is the payload reverse ETL
+      writes back to the product, so its column contract is load-bearing.
+    meta:
+      lateness_tolerance_days: 7
+      required_fields: [churn_score, churn_band, score_version, reasons]
+    columns:
+      - name: account_id
+        tests: [not_null, unique]
+      - name: churn_score
+        tests:
+          - not_null
+          - accepted_range:
+              arguments: {min: 0, max: 100}
+      - name: churn_band
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [low, medium, high, critical, churned]
+      - name: score_version
+        tests: [not_null]
+
+  - name: mart_revenue_mrr
+    description: Daily MRR and subscription counts by plan.
+    columns:
+      - name: mrr_cents
+        tests:
+          - accepted_range:
+              arguments: {min: 0}
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [date_day, plan_code]
+
+  - name: mart_activation_funnel
+    description: Signup cohorts by week, with activation and conversion steps.
+    columns:
+      - name: cohort_week
+        tests: [not_null, unique]

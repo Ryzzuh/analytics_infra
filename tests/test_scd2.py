@@ -59,7 +59,9 @@ def built(conn, source, dbt_env):  # noqa: F811
     def _build():
         load_cdc(conn, source)
         conn.commit()
-        dbt("build", "--select", "stg_subscription_changes+", env=dbt_env)
+        # Exactly the models these tests assert on. `stg_subscription_changes+` would now
+        # drag in marts whose other parents this test never loads.
+        dbt("build", "--select", "stg_subscription_changes", "dim_subscription", env=dbt_env)
 
     return _build
 
@@ -187,7 +189,7 @@ def test_reconciliation_test_fails_when_cdc_missed_a_change(conn, source, dbt_en
 
     # `run`, not `build`: build would execute the reconciliation test as part of the same
     # invocation, and this test needs to assert on it separately.
-    dbt("run", "--select", "stg_subscription_changes+", env=dbt_env)
+    dbt("run", "--select", "stg_subscription_changes", "dim_subscription", env=dbt_env)
     failures = dbt(
         "test",
         "--select",

@@ -11,6 +11,9 @@ target-path: "target"
 vars:
   # Default lateness tolerance; individual models override via meta (SPEC.md §6.2).
   lookback_days: 3
+  # The date spine starts here. Must predate the oldest history the backfill seeds (M4),
+  # or daily facts silently lose their earliest days.
+  spine_start_date: '2025-01-01'
 
 models:
   analytics_infra:
@@ -19,4 +22,7 @@ models:
       +materialized: incremental
     core:
       +schema: core
+      +materialized: table
+    marts:
+      +schema: marts
       +materialized: table

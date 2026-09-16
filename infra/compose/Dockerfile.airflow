@@ -1,10 +1,23 @@
-FROM apache/airflow:3.0.3-python3.12
-ENV PIP_NO_CACHE_DIR=1
+# Pinned to 3.2.2 rather than latest: Cosmos's Airflow-3 plugin requires >= 3.1, and pinning
+# an exact patch keeps a scheduler upgrade from arriving silently with a rebuild.
+FROM apache/airflow:3.2.2-python3.12
+ENV PIP_NO_CACHE_DIR=1 \
+    DBT_PROJECT_DIR=/opt/dbt \
+    DBT_EXECUTABLE_PATH=/home/airflow/.local/bin/dbt \
+    DBT_MANIFEST_PATH=/opt/dbt/target/manifest.json
+
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
 USER airflow
+
 # The loader library is installed into the image; DAGs import it rather than vendoring logic,
 # so the same code is unit-tested outside Airflow (SPEC.md §12).
 COPY --chown=airflow platform/loader /opt/loader
-RUN pip install "/opt/loader[kafka]"
+RUN pip install "/opt/loader[kafka]" "astronomer-cosmos>=1.15" "dbt-postgres>=1.8"
+
+COPY --chown=airflow dbt /opt/dbt
+# Build the manifest once, here. The transform DAG renders from it, so the scheduler never
+# shells out to dbt while parsing.
+RUN cd /opt/dbt && dbt parse --profiles-dir . --project-dir . --target local || \
+    (echo "dbt parse failed; the transform DAG cannot render" && exit 1)

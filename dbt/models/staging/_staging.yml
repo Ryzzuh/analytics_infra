@@ -37,7 +37,8 @@ models:
       - name: op
         tests:
           - accepted_values:
-              values: ['c', 'u', 'd', 'r']
+              arguments:
+                values: ['c', 'u', 'd', 'r']
 
   - name: stg_product_events
     description: >

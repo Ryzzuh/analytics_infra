@@ -17,7 +17,8 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: [trial, active, past_due, cancelled]
+              arguments:
+                values: [trial, active, past_due, cancelled]
       - name: valid_from
         tests: [not_null]
       - name: valid_to
