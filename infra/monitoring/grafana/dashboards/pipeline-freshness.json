@@ -1,0 +1,89 @@
+{
+  "uid": "pipeline-freshness",
+  "title": "Pipeline freshness",
+  "description": "Each layer's age against its SLO (SPEC.md \u00a710.1). The SLO line comes from the warehouse, so this panel and the alert cannot disagree.",
+  "tags": [
+    "analytics-platform"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Freshness by layer",
+      "id": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "analytics_freshness_seconds",
+          "legendFormat": "{{layer}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "SLO target by layer",
+      "id": 2,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "analytics_freshness_slo_seconds",
+          "legendFormat": "{{layer}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Breach margin (negative is healthy)",
+      "id": 3,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "analytics_freshness_seconds - on (layer) analytics_freshness_slo_seconds",
+          "legendFormat": "{{layer}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

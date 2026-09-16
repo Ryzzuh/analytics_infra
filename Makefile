@@ -20,6 +20,11 @@ test-all: ## Every test, including the dbt builds (slower: real dbt runs per tes
 test-slowest: ## Show which tests dominate the runtime
 	$(UV) run pytest --durations=15 -q
 
+test-alerts: ## Alert rule unit tests (promtool) + Alertmanager config check
+	cd infra/monitoring && promtool test rules rules_test.yml
+	amtool check-config infra/monitoring/alertmanager.yml
+	promtool check config infra/monitoring/prometheus.yml
+
 lint: ## ruff check + format check
 	$(UV) run ruff check .
 	$(UV) run ruff format --check .
@@ -75,5 +80,5 @@ load-once: ## Run one micro-batch load outside Airflow, against the running stac
 dbt: ## Build the dbt models against the running warehouse
 	cd dbt && $(UV) run --with dbt-postgres dbt build --profiles-dir .
 
-.PHONY: help install test test-all test-slowest lint fmt up up-full down nuke logs ps ddl load-once dbt \
+.PHONY: help install test test-all test-slowest test-alerts lint fmt up up-full down nuke logs ps ddl load-once dbt \
 	history history-estimate golden restore

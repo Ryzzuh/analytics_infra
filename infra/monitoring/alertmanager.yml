@@ -1,0 +1,48 @@
+# Alertmanager (SPEC.md §10.2).
+#
+# Paging goes to Telegram through the alert bridge. The Console does NOT read alerts from here:
+# it queries Prometheus directly, so it shows everything that is firing, including alerts that
+# are inhibited below. That split is the whole design — a visitor exercising a chaos scenario
+# should be visible on the status page and invisible on the phone.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: telegram
+  group_by: [alertname, severity]
+  # Long enough to batch an incident's related alerts into one message, short enough that the
+  # first notification is not stale by the time it arrives.
+  group_wait: 30s
+  group_interval: 5m
+  # Slow: a re-notification every four hours for something already being worked on is a
+  # reminder; every thirty minutes is a reason to mute the chat.
+  repeat_interval: 4h
+  routes:
+    # Markers and informational alerts belong on the status page, not on a phone.
+    - matchers: [severity = "info"]
+      receiver: "null"
+      continue: false
+
+receivers:
+  - name: telegram
+    webhook_configs:
+      - url: http://alert-bridge:8004/alerts
+        send_resolved: true
+
+  - name: "null"
+
+inhibit_rules:
+  # While a chaos window is open, suppress paging. The alerts still fire in Prometheus and
+  # still appear in the Console; they simply do not wake anybody at 3am because a stranger
+  # with the demo passcode pressed a button (SPEC.md §10.2).
+  #
+  # The corollary is the valuable part: an alert that pages with no chaos window open is a
+  # genuine incident, with no further interpretation needed.
+  - source_matchers: [alertname = "ChaosWindowOpen"]
+    target_matchers: [severity =~ "warning|critical"]
+    equal: []
+
+  # A critical alert about a slot already implies the warning about the same slot.
+  - source_matchers: [alertname = "SlotWalRetainedCritical"]
+    target_matchers: [alertname = "SlotWalRetainedWarning"]
+    equal: [slot_name]

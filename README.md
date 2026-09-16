@@ -5,12 +5,11 @@ data, duplicates, schema drift, connector outages, crashes mid-commit, erasure r
 
 Full design: [SPEC.md](SPEC.md). Decisions: [docs/adr](docs/adr).
 
-> **Status: M5 (billing and activation).** The platform now talks to systems it does not
-> control: a Stripe-shaped provider whose webhooks are dropped, duplicated and reordered on
-> purpose, a daily reconciliation pull that measures exactly what the fast path missed, and
-> reverse ETL pushing churn scores back into the product — diff-based, rate-limited, and with a
-> failure taxonomy rather than a try/except.
-> Next: M6 (Prometheus, Grafana, Telegram alerting, the data-quality framework).
+> **Status: M6 (observability).** The platform now reports on itself: data-quality checks for
+> the failures where every row is valid and the shape is wrong, freshness measured against SLOs
+> that live in the warehouse, and fourteen alert rules — each with a unit test proving it fires
+> on its condition and stays quiet on the near misses, and each with a runbook.
+> Next: M7 (Terraform, deploy pipeline, sops, the live instance).
 
 ## The idea in one paragraph
 
@@ -24,8 +23,9 @@ the chaos scenarios that prove the failure paths behave.
 
 ```bash
 make install         # uv workspace
-make test            # 87 fast tests, ~1 min (embedded Postgres, incl. logical replication)
+make test            # 119 fast tests, ~2 min (embedded Postgres, incl. logical replication)
 make test-all        # + 27 that invoke dbt for real, ~4 min
+make test-alerts     # alert rule unit tests (promtool) + Alertmanager config check
 make history-estimate  # what a 12-month seed would cost, without producing anything
 make up              # core stack (~4 GB): Redpanda, warehouse, Airflow, collector, simulator
 ```
@@ -95,6 +95,9 @@ load exactly once.
 | `db/app/ddl/` | Source OLTP schema, publication and replica identity |
 | `infra/connect/` | Debezium connector config, with the reasoning per setting |
 | `platform/reverse_etl/` | Activation: diffing, idempotency keys, and the failure taxonomy |
+| `platform/dq/` | Volume anomalies, duplicate/quarantine rates, freshness against SLOs |
+| `infra/monitoring/` | Prometheus rules **and their unit tests**, Alertmanager, dashboards |
+| `docs/runbooks/` | One per alert: symptom, the queries to run, the fix, and what not to do |
 | `platform/opsctl/` | Golden snapshots: what to capture, how stale is too stale, restore order |
 | `infra/golden/` | The docker half of snapshot and restore |
 | `db/warehouse/ddl/` | `ops` (ledger, DLQ, erasure) and `raw` schemas |
@@ -109,6 +112,10 @@ load exactly once.
 - **[ADR 0003](docs/adr/0003-history-backfill-and-golden-snapshots.md)** — why replayed history
   gets its own topics, why the cutoff measures load lag, and why a reset catches up instead of
   leaving a hole.
+- **[Alert rules](infra/monitoring/rules/platform.yml)** and
+  **[their tests](infra/monitoring/rules_test.yml)** — the near-miss cases are the interesting
+  half: a micro-batch lag sawtooth, an idle source, a 1% reverse-ETL error rate. None of them
+  page, on purpose.
 - **[`mart_account_health`](dbt/models/marts/mart_account_health.sql)** — the churn score, with
   every component carrying its own reason, because a score nobody can explain cannot be acted
   on by the product that receives it.

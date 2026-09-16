@@ -20,6 +20,22 @@ jobs:
       # needed and the same command runs identically on a laptop.
       - run: uv run pytest -q
 
+  alert-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Proves each alert fires on its condition AND stays quiet on the near misses. Reviewing
+      # the YAML cannot establish either.
+      - name: Install promtool and amtool
+        run: |
+          curl -sSL https://github.com/prometheus/prometheus/releases/download/v3.6.0/prometheus-3.6.0.linux-amd64.tar.gz | tar xz
+          curl -sSL https://github.com/prometheus/alertmanager/releases/download/v0.28.1/alertmanager-0.28.1.linux-amd64.tar.gz | tar xz
+          sudo mv prometheus-3.6.0.linux-amd64/promtool alertmanager-0.28.1.linux-amd64/amtool /usr/local/bin/
+      - run: promtool check config infra/monitoring/prometheus.yml
+      - run: promtool test rules rules_test.yml
+        working-directory: infra/monitoring
+      - run: amtool check-config infra/monitoring/alertmanager.yml
+
   dag-integrity:
     runs-on: ubuntu-latest
     steps:

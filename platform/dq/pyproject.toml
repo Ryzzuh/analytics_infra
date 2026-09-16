@@ -1,0 +1,13 @@
+[project]
+name = "dq"
+version = "0.1.0"
+description = "Data-quality and freshness checks beyond dbt's own tests"
+requires-python = ">=3.12"
+dependencies = ["psycopg[binary]>=3.2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dq"]

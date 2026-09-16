@@ -1,0 +1,61 @@
+# Prometheus (SPEC.md §10).
+#
+# Scrape interval is 30s rather than the usual 15s: nothing here changes faster than a
+# micro-batch cycle, and on a 16 GB box the samples are better spent on retention than on
+# resolution nobody reads.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    platform: analytics_infra
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
+
+  # The platform's own health, computed from the warehouse ops schema.
+  - job_name: platform
+    static_configs:
+      - targets: [metrics-exporter:8005]
+
+  - job_name: redpanda
+    static_configs:
+      - targets: [redpanda:9644]
+
+  # Retained WAL per replication slot: the metric behind the disk-fill alerts (SPEC.md §9.1).
+  - job_name: postgres_app
+    static_configs:
+      - targets: [postgres-app-exporter:9187]
+    relabel_configs:
+      - target_label: database
+        replacement: app
+
+  - job_name: postgres_warehouse
+    static_configs:
+      - targets: [postgres-warehouse-exporter:9187]
+    relabel_configs:
+      - target_label: database
+        replacement: warehouse
+
+  - job_name: services
+    static_configs:
+      - targets:
+          - collector:8000
+          - billing-mock:8001
+          - webhook-receiver:8002
+          - app-api:8003
+          - alert-bridge:8004
+
+  # Airflow publishes over StatsD; the exporter turns that into a scrape target.
+  - job_name: airflow
+    static_configs:
+      - targets: [statsd-exporter:9102]

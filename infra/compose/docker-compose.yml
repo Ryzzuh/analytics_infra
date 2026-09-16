@@ -7,6 +7,9 @@ x-airflow-env: &airflow-env
   AIRFLOW__CORE__LOAD_EXAMPLES: "false"
   AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
   AIRFLOW__CORE__PARALLELISM: "4"
+  AIRFLOW__METRICS__STATSD_ON: "true"
+  AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
+  AIRFLOW__METRICS__STATSD_PORT: "8125"
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
   WAREHOUSE_DSN: postgresql://warehouse:warehouse@postgres-warehouse:5432/warehouse
   APP_DSN: postgresql://app:app@postgres-app:5432/app
@@ -251,6 +254,98 @@ services:
     command: ["uvicorn", "app_api.app:app", "--host", "0.0.0.0", "--port", "8003"]
     ports: ["8003:8003"]
 
+  # --- observability (SPEC.md §10) -----------------------------------------------------
+  # In the `full` profile: the laptop core profile has to fit in ~4 GB, and these four add
+  # roughly 1.5 GB between them. The VM runs everything.
+
+  metrics-exporter:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile.service
+      args: {SERVICE: metrics_exporter}
+    profiles: [full]
+    depends_on:
+      postgres-warehouse: {condition: service_healthy}
+    environment:
+      WAREHOUSE_DSN: postgresql://warehouse:warehouse@postgres-warehouse:5432/warehouse
+    command: ["uvicorn", "metrics_exporter.app:app", "--host", "0.0.0.0", "--port", "8005"]
+    ports: ["8005:8005"]
+
+  alert-bridge:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile.service
+      args: {SERVICE: alert_bridge}
+    profiles: [full]
+    environment:
+      # Unset locally: the bridge logs what it would have sent rather than failing, so
+      # Alertmanager is not left retrying a notification nobody can receive.
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+    command: ["uvicorn", "alert_bridge.app:app", "--host", "0.0.0.0", "--port", "8004"]
+    ports: ["8004:8004"]
+
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    profiles: [full]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      # 15 days at 30s: enough to see last week's incident, small enough for the box.
+      - --web.enable-lifecycle
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports: ["9090:9090"]
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: [full]
+    volumes:
+      - ../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports: ["9093:9093"]
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    profiles: [full]
+    depends_on: [prometheus]
+    environment:
+      # Anonymous viewing on purpose: the live instance is meant to be browsable without an
+      # account, and nothing here is private (SPEC.md §11).
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["3000:3000"]
+
+  postgres-app-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    profiles: [full]
+    depends_on:
+      postgres-app: {condition: service_healthy}
+    environment:
+      DATA_SOURCE_NAME: postgresql://app:app@postgres-app:5432/app?sslmode=disable
+      # Replication-slot metrics are the reason this exporter is here at all (SPEC.md §9.1).
+      PG_EXPORTER_INCLUDE_DATABASES: app
+
+  postgres-warehouse-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    profiles: [full]
+    depends_on:
+      postgres-warehouse: {condition: service_healthy}
+    environment:
+      DATA_SOURCE_NAME: postgresql://warehouse:warehouse@postgres-warehouse:5432/warehouse?sslmode=disable
+
+  statsd-exporter:
+    image: prom/statsd-exporter:v0.28.0
+    profiles: [full]
+    command: ["--statsd.listen-udp=:8125", "--web.listen-address=:9102"]
+
   redpanda-console:
     image: redpandadata/console:v2.7.2
     profiles: [full]
@@ -261,6 +356,8 @@ services:
     ports: ["8090:8080"]
 
 volumes:
+  prometheus-data:
+  grafana-data:
   redpanda-data:
   warehouse-data:
   app-data:

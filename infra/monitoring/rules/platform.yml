@@ -1,0 +1,158 @@
+# Alert rules (SPEC.md §10.2).
+#
+# Every rule here answers a question an operator would actually ask at 3am, and every one has a
+# unit test in rules_test.yml. An alert nobody has seen fire is a guess.
+#
+# Metric sources:
+#   analytics_*        - the platform's own exporter, reading the warehouse's ops schema
+#   redpanda_*         - Redpanda's built-in metrics endpoint
+#   pg_*               - postgres_exporter on the source database
+#   airflow_*          - Airflow's StatsD metrics
+groups:
+  - name: ingestion
+    rules:
+      - alert: ConsumerLagHigh
+        # ~5 minutes of backlog at the steady rate of 20 events/s. Sustained, because a single
+        # scrape during a micro-batch load always looks like lag.
+        expr: max by (group, topic) (redpanda_kafka_consumer_group_lag_max) > 6000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer group {{ $labels.group }} is {{ $value }} records behind"
+          runbook: docs/runbooks/consumer-lag.md
+
+      - alert: LoaderStalled
+        # The loader has not committed a ledger entry in three scheduled intervals. Distinct
+        # from lag: lag says the backlog is growing, this says nothing is being read at all.
+        expr: analytics_seconds_since_last_load > 900
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No successful load for {{ $labels.topic }} in {{ $value | humanizeDuration }}"
+          runbook: docs/runbooks/loader-stalled.md
+
+      - alert: CdcStalled
+        # Only meaningful while the source is actually being written to: a quiet database
+        # producing no changes is not a broken connector, and paging for it teaches people
+        # that this alert means nothing.
+        expr: analytics_seconds_since_last_cdc_change > 600 and analytics_oltp_writes_per_minute > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CDC has produced nothing for 10m while the source is still being written"
+          runbook: docs/runbooks/slot-invalidation.md
+
+  - name: replication_slot
+    rules:
+      # The disk-fill scenario (SPEC.md §9.1). Warn early enough to act, because past the cap
+      # Postgres invalidates the slot and CDC needs a re-snapshot.
+      - alert: SlotWalRetainedWarning
+        expr: pg_replication_slots_pg_wal_lsn_diff > 2e9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slot {{ $labels.slot_name }} is holding {{ $value | humanize1024 }}B of WAL"
+          runbook: docs/runbooks/slot-invalidation.md
+
+      - alert: SlotWalRetainedCritical
+        # 4 GB against a 5 GB cap: roughly the last chance to fix it before the slot is lost.
+        expr: pg_replication_slots_pg_wal_lsn_diff > 4e9
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Slot {{ $labels.slot_name }} is close to the WAL cap; CDC is about to break"
+          runbook: docs/runbooks/slot-invalidation.md
+
+      - alert: CdcGapOpen
+        expr: analytics_cdc_gap_open > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "CDC gap recorded and not yet resolved; history may be incomplete"
+          runbook: docs/runbooks/slot-invalidation.md
+
+  - name: data_quality
+    rules:
+      - alert: FreshnessSloBreach
+        # Thresholds come from the warehouse (ops.freshness_slo) rather than being written into
+        # the rule, so the Console, the checks and this alert cannot drift apart.
+        expr: analytics_freshness_seconds > on (layer) analytics_freshness_slo_seconds
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.layer }} is {{ $value | humanizeDuration }} behind its SLO"
+          runbook: docs/runbooks/freshness.md
+
+      - alert: DqCheckFailing
+        # 2 = fail, 1 = warn, 0 = pass.
+        expr: analytics_dq_check_status == 2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data-quality check {{ $labels.check }} failing on {{ $labels.target }}"
+          runbook: docs/runbooks/dq-failure.md
+
+      - alert: QuarantineRateHigh
+        expr: analytics_quarantine_rate > 0.01
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of recent events are being held back"
+          runbook: docs/runbooks/quarantine.md
+
+      - alert: DriftBlocking
+        expr: analytics_drift_blocking_models > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Schema drift is blocking {{ $value }} model(s)"
+          runbook: docs/runbooks/schema-drift.md
+
+  - name: orchestration_and_activation
+    rules:
+      - alert: DagFailure
+        expr: increase(airflow_dagrun_failed_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "DAG {{ $labels.dag_id }} failed"
+          runbook: docs/runbooks/dag-failure.md
+
+      - alert: ReverseEtlErrorRate
+        # Matches the sync's own threshold: one bad account in two thousand is not an incident.
+        expr: analytics_reverse_etl_error_rate > 0.02
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reverse ETL failing for {{ $value | humanizePercentage }} of accounts"
+          runbook: docs/runbooks/reverse-etl.md
+
+      - alert: BillingWebhookMissRateHigh
+        expr: analytics_billing_webhook_miss_rate > 0.25
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The billing fast path missed {{ $value | humanizePercentage }} of events"
+          runbook: docs/runbooks/billing-reconciliation.md
+
+  - name: chaos
+    rules:
+      # Not an incident: a marker. Alertmanager inhibits pager-worthy alerts while this is
+      # firing, so a visitor exercising a chaos scenario does not wake anybody, while the
+      # Console still shows every firing alert by reading Prometheus directly (SPEC.md §10.2).
+      - alert: ChaosWindowOpen
+        expr: analytics_chaos_window_active > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "Chaos scenario in progress; paging is suppressed"

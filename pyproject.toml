@@ -3,7 +3,18 @@ name = "analytics-infra"
 version = "0.1.0"
 description = "End-to-end analytics platform demo (see SPEC.md)"
 requires-python = ">=3.12,<3.13"
-dependencies = ["loader", "collector", "simulator", "opsctl", "reverse-etl", "billing-mock", "app-api"]
+dependencies = [
+    "loader",
+    "collector",
+    "simulator",
+    "opsctl",
+    "reverse-etl",
+    "dq",
+    "billing-mock",
+    "app-api",
+    "metrics-exporter",
+    "alert-bridge",
+]
 
 [dependency-groups]
 dev = [
@@ -19,10 +30,13 @@ members = [
     "platform/loader",
     "platform/opsctl",
     "platform/reverse_etl",
+    "platform/dq",
     "services/collector",
     "services/simulator",
     "services/billing_mock",
     "services/app_api",
+    "services/metrics_exporter",
+    "services/alert_bridge",
 ]
 
 [tool.uv.sources]
@@ -31,8 +45,11 @@ collector = { workspace = true }
 simulator = { workspace = true }
 opsctl = { workspace = true }
 reverse-etl = { workspace = true }
+dq = { workspace = true }
 billing-mock = { workspace = true }
 app-api = { workspace = true }
+metrics-exporter = { workspace = true }
+alert-bridge = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

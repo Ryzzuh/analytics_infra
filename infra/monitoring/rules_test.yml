@@ -1,0 +1,291 @@
+# Unit tests for the alert rules (SPEC.md §14, M6: "all §10.2 alerts fire in test").
+#
+# Run by `make test-alerts` and in CI. These prove two things that reviewing YAML cannot: that
+# each alert fires on the condition it claims to, and — more importantly — that it stays quiet
+# on the near-miss cases that would otherwise train people to ignore it.
+rule_files:
+  - rules/platform.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------ consumer lag
+  - interval: 1m
+    input_series:
+      - series: 'redpanda_kafka_consumer_group_lag_max{group="warehouse-loader", topic="product.session"}'
+        values: '7000+0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ConsumerLagHigh
+        exp_alerts: []          # sustained for 10m, so a five-minute backlog is not yet an alert
+      - eval_time: 12m
+        alertname: ConsumerLagHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              group: warehouse-loader
+              topic: product.session
+            exp_annotations:
+              summary: "Consumer group warehouse-loader is 7000 records behind"
+              runbook: docs/runbooks/consumer-lag.md
+
+  - interval: 1m
+    input_series:
+      # A micro-batch load: lag spikes between runs and drains. This must NOT alert, or every
+      # normal five-minute cycle pages somebody.
+      - series: 'redpanda_kafka_consumer_group_lag_max{group="warehouse-loader", topic="product.session"}'
+        values: '0 2000 4000 6500 7000 0 2000 4000 6500 7000 0 2000 4000'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ConsumerLagHigh
+        exp_alerts: []
+
+  # ------------------------------------------------------------------ loader stalled
+  - interval: 1m
+    input_series:
+      - series: 'analytics_seconds_since_last_load{topic="product.feature_usage"}'
+        values: '300+60x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LoaderStalled
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LoaderStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              topic: product.feature_usage
+            exp_annotations:
+              summary: "No successful load for product.feature_usage in 25m 0s"
+              runbook: docs/runbooks/loader-stalled.md
+
+  # ------------------------------------------------------------------ CDC stalled
+  - interval: 1m
+    input_series:
+      - series: 'analytics_seconds_since_last_cdc_change'
+        values: '700+0x20'
+      - series: 'analytics_oltp_writes_per_minute'
+        values: '40+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CdcStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "CDC has produced nothing for 10m while the source is still being written"
+              runbook: docs/runbooks/slot-invalidation.md
+
+  - interval: 1m
+    input_series:
+      # An idle source produces no changes. That is not a broken connector, and paging for it
+      # is how an alert becomes background noise.
+      - series: 'analytics_seconds_since_last_cdc_change'
+        values: '700+0x20'
+      - series: 'analytics_oltp_writes_per_minute'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CdcStalled
+        exp_alerts: []
+
+  # ------------------------------------------------------------------ replication slot
+  - interval: 1m
+    input_series:
+      - series: 'pg_replication_slots_pg_wal_lsn_diff{slot_name="analytics_cdc"}'
+        values: '2500000000+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SlotWalRetainedWarning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              slot_name: analytics_cdc
+            exp_annotations:
+              summary: "Slot analytics_cdc is holding 2.328GiB of WAL"
+              runbook: docs/runbooks/slot-invalidation.md
+      - eval_time: 6m
+        alertname: SlotWalRetainedCritical
+        exp_alerts: []          # warning only; the critical threshold is 4 GB
+
+  - interval: 1m
+    input_series:
+      - series: 'pg_replication_slots_pg_wal_lsn_diff{slot_name="analytics_cdc"}'
+        values: '4500000000+0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SlotWalRetainedCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              slot_name: analytics_cdc
+            exp_annotations:
+              summary: "Slot analytics_cdc is close to the WAL cap; CDC is about to break"
+              runbook: docs/runbooks/slot-invalidation.md
+
+  - interval: 1m
+    input_series:
+      - series: 'analytics_cdc_gap_open'
+        values: '1+0x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CdcGapOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "CDC gap recorded and not yet resolved; history may be incomplete"
+              runbook: docs/runbooks/slot-invalidation.md
+
+  # ------------------------------------------------------------------ freshness SLO
+  - interval: 1m
+    input_series:
+      # staging is 2h old against a 1h SLO; marts are 6h old against 24h and must stay quiet.
+      - series: 'analytics_freshness_seconds{layer="staging"}'
+        values: '7200+0x20'
+      - series: 'analytics_freshness_slo_seconds{layer="staging"}'
+        values: '3600+0x20'
+      - series: 'analytics_freshness_seconds{layer="marts"}'
+        values: '21600+0x20'
+      - series: 'analytics_freshness_slo_seconds{layer="marts"}'
+        values: '86400+0x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: FreshnessSloBreach
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: staging
+            exp_annotations:
+              summary: "staging is 2h 0m 0s behind its SLO"
+              runbook: docs/runbooks/freshness.md
+
+  # ------------------------------------------------------------------ data quality
+  - interval: 1m
+    input_series:
+      - series: 'analytics_dq_check_status{check="volume_anomaly", target="core.fct_account_activity_daily"}'
+        values: '2+0x20'
+      - series: 'analytics_dq_check_status{check="duplicate_rate", target="core.fct_account_activity_daily"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DqCheckFailing
+        exp_alerts:
+          # Only the failing check. A warn (1) is deliberately not pageable.
+          - exp_labels:
+              severity: warning
+              check: volume_anomaly
+              target: core.fct_account_activity_daily
+            exp_annotations:
+              summary: "Data-quality check volume_anomaly failing on core.fct_account_activity_daily"
+              runbook: docs/runbooks/dq-failure.md
+
+  - interval: 1m
+    input_series:
+      - series: 'analytics_quarantine_rate'
+        values: '0.02+0x70'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: QuarantineRateHigh
+        exp_alerts: []          # an hour of it, not half an hour
+      - eval_time: 65m
+        alertname: QuarantineRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "2% of recent events are being held back"
+              runbook: docs/runbooks/quarantine.md
+
+  - interval: 1m
+    input_series:
+      - series: 'analytics_drift_blocking_models'
+        values: '1+0x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: DriftBlocking
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Schema drift is blocking 1 model(s)"
+              runbook: docs/runbooks/schema-drift.md
+
+  # ------------------------------------------------------------------ orchestration
+  - interval: 1m
+    input_series:
+      - series: 'airflow_dagrun_failed_total{dag_id="load_cdc"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DagFailure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              dag_id: load_cdc
+            exp_annotations:
+              summary: "DAG load_cdc failed"
+              runbook: docs/runbooks/dag-failure.md
+
+  # ------------------------------------------------------------------ activation
+  - interval: 1m
+    input_series:
+      - series: 'analytics_reverse_etl_error_rate'
+        values: '0.05+0x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ReverseEtlErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Reverse ETL failing for 5% of accounts"
+              runbook: docs/runbooks/reverse-etl.md
+
+  - interval: 1m
+    input_series:
+      # One failure in a hundred accounts: expected, and must not alert.
+      - series: 'analytics_reverse_etl_error_rate'
+        values: '0.01+0x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ReverseEtlErrorRate
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'analytics_billing_webhook_miss_rate'
+        values: '0.4+0x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: BillingWebhookMissRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "The billing fast path missed 40% of events"
+              runbook: docs/runbooks/billing-reconciliation.md
+
+  - interval: 1m
+    input_series:
+      # Some misses are the design working: the daily pull exists for exactly this.
+      - series: 'analytics_billing_webhook_miss_rate'
+        values: '0.05+0x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: BillingWebhookMissRateHigh
+        exp_alerts: []
+
+  # ------------------------------------------------------------------ chaos marker
+  - interval: 1m
+    input_series:
+      - series: 'analytics_chaos_window_active'
+        values: '1+0x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ChaosWindowOpen
+        exp_alerts:
+          - exp_labels:
+              severity: info
+            exp_annotations:
+              summary: "Chaos scenario in progress; paging is suppressed"
