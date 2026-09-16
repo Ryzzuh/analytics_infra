@@ -5,10 +5,12 @@ data, duplicates, schema drift, connector outages, crashes mid-commit, erasure r
 
 Full design: [SPEC.md](SPEC.md). Decisions: [docs/adr](docs/adr).
 
-> **Status: M4 (history).** The warehouse now has a past: twelve months replayed through
-> dedicated backfill topics, a lateness cutoff that holds stale live events back instead of
-> rewriting closed periods, and golden snapshots that restore with a catch-up rather than a gap.
-> Next: M5 (billing mock, webhooks + daily reconciliation, reverse ETL).
+> **Status: M5 (billing and activation).** The platform now talks to systems it does not
+> control: a Stripe-shaped provider whose webhooks are dropped, duplicated and reordered on
+> purpose, a daily reconciliation pull that measures exactly what the fast path missed, and
+> reverse ETL pushing churn scores back into the product — diff-based, rate-limited, and with a
+> failure taxonomy rather than a try/except.
+> Next: M6 (Prometheus, Grafana, Telegram alerting, the data-quality framework).
 
 ## The idea in one paragraph
 
@@ -22,8 +24,8 @@ the chaos scenarios that prove the failure paths behave.
 
 ```bash
 make install         # uv workspace
-make test            # 56 fast tests, ~1 min (embedded Postgres, incl. logical replication)
-make test-all        # + 22 that invoke dbt for real, ~3 min
+make test            # 87 fast tests, ~1 min (embedded Postgres, incl. logical replication)
+make test-all        # + 27 that invoke dbt for real, ~4 min
 make history-estimate  # what a 12-month seed would cost, without producing anything
 make up              # core stack (~4 GB): Redpanda, warehouse, Airflow, collector, simulator
 ```
@@ -85,10 +87,14 @@ load exactly once.
 | `platform/loader/` | Ledger, deterministic range reads, replace-on-rerun, DLQ, erasure filter |
 | `services/collector/` | FastAPI event collector; validates the envelope only |
 | `services/simulator/` | Synthetic SaaS traffic, including duplicates and late events |
+| `services/billing_mock/` | A payment provider that drops, duplicates and reorders webhooks |
+| `services/webhook_receiver/` | Takes webhooks, puts them on the broker, acks only what is durable |
+| `services/app_api/` | The product: receives churn scores, rate-limits, 404s for erased accounts |
 | `airflow/dags/` | Micro-batch load DAGs |
 | `dbt/` | `staging` → `core` (SCD2, facts, date spine) → `marts` |
 | `db/app/ddl/` | Source OLTP schema, publication and replica identity |
 | `infra/connect/` | Debezium connector config, with the reasoning per setting |
+| `platform/reverse_etl/` | Activation: diffing, idempotency keys, and the failure taxonomy |
 | `platform/opsctl/` | Golden snapshots: what to capture, how stale is too stale, restore order |
 | `infra/golden/` | The docker half of snapshot and restore |
 | `db/warehouse/ddl/` | `ops` (ledger, DLQ, erasure) and `raw` schemas |

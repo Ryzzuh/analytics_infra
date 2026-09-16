@@ -11,6 +11,8 @@ x-airflow-env: &airflow-env
   WAREHOUSE_DSN: postgresql://warehouse:warehouse@postgres-warehouse:5432/warehouse
   APP_DSN: postgresql://app:app@postgres-app:5432/app
   REDPANDA_BOOTSTRAP: redpanda:9092
+  BILLING_API_URL: http://billing-mock:8001
+  APP_API_URL: http://app-api:8003
 
 services:
   redpanda:
@@ -43,7 +45,8 @@ services:
          rpk topic create product.$$t -p 6 -r 1 --brokers redpanda:9092 || true;
          rpk topic create product.$$t.backfill -p 6 -r 1 --brokers redpanda:9092
            -c retention.ms=43200000 || true;
-       done'
+       done;
+       rpk topic create billing.webhooks -p 3 -r 1 --brokers redpanda:9092 || true'
     restart: "no"
 
   postgres-warehouse:
@@ -206,6 +209,47 @@ services:
       COLLECTOR_URL: http://collector:8000
       SIM_ACCOUNTS: "${SIM_ACCOUNTS:-500}"
       SIM_RATE: "${SIM_RATE:-2}"
+
+  billing-mock:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile.service
+      args: {SERVICE: billing_mock}
+    environment:
+      WEBHOOK_URL: http://webhook-receiver:8002/webhooks/billing
+      BILLING_VISIBILITY_LAG_S: "5"
+      BILLING_RATE_LIMIT_EVERY: "40"
+    command: ["uvicorn", "billing_mock.app:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports: ["8001:8001"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8001/health')\""]
+      interval: 10s
+      retries: 5
+
+  webhook-receiver:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile.service
+      args: {SERVICE: webhook_receiver}
+    depends_on:
+      redpanda: {condition: service_healthy}
+    environment:
+      REDPANDA_BOOTSTRAP: redpanda:9092
+    command: ["uvicorn", "webhook_receiver.app:app", "--host", "0.0.0.0", "--port", "8002"]
+    ports: ["8002:8002"]
+
+  app-api:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile.service
+      args: {SERVICE: app_api}
+    depends_on:
+      postgres-app: {condition: service_healthy}
+    environment:
+      APP_DSN: postgresql://app:app@postgres-app:5432/app
+      INSIGHTS_RATE_LIMIT_PER_MINUTE: "600"
+    command: ["uvicorn", "app_api.app:app", "--host", "0.0.0.0", "--port", "8003"]
+    ports: ["8003:8003"]
 
   redpanda-console:
     image: redpandadata/console:v2.7.2

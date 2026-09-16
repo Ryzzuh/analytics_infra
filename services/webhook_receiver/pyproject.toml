@@ -1,0 +1,13 @@
+[project]
+name = "webhook-receiver"
+version = "0.1.0"
+description = "Receives billing webhooks and produces them to the broker"
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.115", "uvicorn[standard]>=0.32", "confluent-kafka>=2.5", "prometheus-client>=0.21"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/webhook_receiver"]

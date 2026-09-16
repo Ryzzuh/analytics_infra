@@ -68,6 +68,17 @@ class CdcChange:
 
 
 @dataclass(frozen=True, slots=True)
+class BillingWebhook:
+    provider_event_id: str
+    event_type: str
+    account_id: int | None
+    provider_created_at: datetime
+    received_at: datetime
+    payload: dict[str, Any]
+    record: SourceRecord
+
+
+@dataclass(frozen=True, slots=True)
 class LedgerEntry:
     id: int
     dag_run_id: str

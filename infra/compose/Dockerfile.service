@@ -1,0 +1,9 @@
+# One image recipe for the small FastAPI services: they differ only in which package is
+# installed and which app uvicorn runs (set by the compose `command`).
+FROM python:3.12-slim
+ARG SERVICE
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+COPY services/${SERVICE}/pyproject.toml services/${SERVICE}/pyproject.toml
+COPY services/${SERVICE}/src services/${SERVICE}/src
+RUN pip install ./services/${SERVICE}

@@ -17,6 +17,16 @@ sources:
           error_after: {count: 30, period: minute}
       - name: oltp_snapshots
         description: Independent daily snapshot of source state; never derived from CDC.
+      - name: billing_webhook_events
+        loaded_at_field: loaded_at
+        freshness:
+          warn_after: {count: 30, period: minute}
+          error_after: {count: 120, period: minute}
+      - name: billing_events_batch
+        loaded_at_field: pulled_at
+        freshness:
+          warn_after: {count: 30, period: hour}
+          error_after: {count: 48, period: hour}
 
   - name: ops
     schema: ops
@@ -39,6 +49,25 @@ models:
           - accepted_values:
               arguments:
                 values: ['c', 'u', 'd', 'r']
+
+  - name: stg_billing_events
+    description: >
+      Webhook and batch billing paths merged on the provider's event id, with how each event
+      arrived.
+    columns:
+      - name: provider_event_id
+        tests: [not_null, unique]
+      - name: arrived_by
+        tests:
+          - accepted_values:
+              arguments:
+                values: [both, webhook_only, batch_only]
+
+  - name: stg_billing_reconciliation
+    description: Daily webhook miss rate; the measure of whether the fast path can be trusted.
+    columns:
+      - name: billing_day
+        tests: [not_null, unique]
 
   - name: stg_product_events_quarantined
     description: >

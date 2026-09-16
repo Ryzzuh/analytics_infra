@@ -138,4 +138,58 @@ def cdc_target() -> LoadTarget:
     )
 
 
-__all__ = ["CDC_COPY", "PRODUCT_EVENTS", "LoadTarget", "ParseFailure", "SkipRecord", "cdc_target"]
+# ------------------------------------------------------------------------- billing webhooks
+
+BILLING_COPY = """
+COPY raw.billing_webhook_events (
+    loaded_date, topic, partition_id, kafka_offset, ledger_id, provider_event_id, event_type,
+    account_id, provider_created_at, received_at, kafka_ts, loaded_at, source_path, payload
+) FROM STDIN
+"""
+
+
+def _billing_row(
+    hook, *, ledger_id: int, loaded_date: date, loaded_at: datetime, source_path: str
+) -> tuple:
+    r = hook.record
+    return (
+        loaded_date,
+        r.topic,
+        r.partition,
+        r.offset,
+        ledger_id,
+        hook.provider_event_id,
+        hook.event_type,
+        hook.account_id,
+        hook.provider_created_at,
+        hook.received_at,
+        r.timestamp,
+        loaded_at,
+        source_path,
+        Jsonb(hook.payload),
+    )
+
+
+def billing_target() -> LoadTarget:
+    from .billing_events import parse_billing_webhook
+
+    return LoadTarget(
+        name="billing_webhooks",
+        table="raw.billing_webhook_events",
+        parse=parse_billing_webhook,
+        copy_sql=BILLING_COPY,
+        to_row=_billing_row,
+        sort_key=lambda hook: hook.provider_created_at,
+    )
+
+
+__all__ = [
+    "BILLING_COPY",
+    "CDC_COPY",
+    "PRODUCT_EVENTS",
+    "LoadTarget",
+    "ParseFailure",
+    "SkipRecord",
+    "billing_target",
+    "cdc_target",
+]

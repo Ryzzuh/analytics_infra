@@ -46,7 +46,8 @@ transform = DbtDag(
     ),
     execution_config=ExecutionConfig(dbt_executable_path=DBT_EXECUTABLE),
     render_config=RenderConfig(load_method=LoadMode.DBT_MANIFEST),
-    schedule="0 16 * * *",  # 02:00 AEST, after the OLTP snapshot at 01:00
+    # 02:00 AEST: after the OLTP snapshot (01:00) and the billing pull (01:30).
+    schedule="0 16 * * *",
     catchup=False,
     max_active_runs=1,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=2)},

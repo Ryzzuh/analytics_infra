@@ -3,7 +3,7 @@ name = "analytics-infra"
 version = "0.1.0"
 description = "End-to-end analytics platform demo (see SPEC.md)"
 requires-python = ">=3.12,<3.13"
-dependencies = ["loader", "collector", "simulator", "opsctl"]
+dependencies = ["loader", "collector", "simulator", "opsctl", "reverse-etl", "billing-mock", "app-api"]
 
 [dependency-groups]
 dev = [
@@ -15,13 +15,24 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["platform/loader", "platform/opsctl", "services/collector", "services/simulator"]
+members = [
+    "platform/loader",
+    "platform/opsctl",
+    "platform/reverse_etl",
+    "services/collector",
+    "services/simulator",
+    "services/billing_mock",
+    "services/app_api",
+]
 
 [tool.uv.sources]
 loader = { workspace = true }
 collector = { workspace = true }
 simulator = { workspace = true }
 opsctl = { workspace = true }
+reverse-etl = { workspace = true }
+billing-mock = { workspace = true }
+app-api = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -34,3 +45,14 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's documented idiom is calling these in argument defaults; B008 is a false positive
+# for them, and working around it would make the endpoint signatures worse.
+extend-immutable-calls = [
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.Depends",
+]
