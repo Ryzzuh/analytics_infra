@@ -1,0 +1,34 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: Loader-owned, append-only. Never written by dbt.
+    tables:
+      - name: product_events
+        loaded_at_field: loaded_at
+        freshness:
+          warn_after: {count: 15, period: minute}
+          error_after: {count: 60, period: minute}
+
+models:
+  - name: stg_product_events
+    description: >
+      Typed and deduplicated product events. One row per event_id, keeping the first arrival.
+    meta:
+      lateness_tolerance_days: 3
+      # Fields this model depends on. The drift detector reads this from manifest.json, so a
+      # field disappearing upstream fails THIS model rather than silently zeroing a mart
+      # (SPEC.md §7).
+      required_fields: [feature, surface, plan, duration_ms]
+    columns:
+      - name: event_id
+        tests: [not_null, unique]
+      - name: account_id
+        tests: [not_null]
+      - name: event_type
+        tests: [not_null]
+      - name: event_time
+        tests: [not_null]
+      - name: duplicate_copies
+        description: How many additional copies of this event arrived. Feeds the dup-rate metric.

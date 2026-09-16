@@ -1,0 +1,16 @@
+[project]
+name = "simulator"
+version = "0.1.0"
+description = "Synthetic SaaS product: users, sessions and feature usage"
+requires-python = ">=3.12"
+dependencies = ["httpx>=0.27", "prometheus-client>=0.21"]
+
+[project.scripts]
+simulator = "simulator.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/simulator"]

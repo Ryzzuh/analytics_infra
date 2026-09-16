@@ -1,0 +1,19 @@
+name: analytics_infra
+version: 0.1.0
+config-version: 2
+profile: analytics_infra
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: "target"
+
+vars:
+  # Default lateness tolerance; individual models override via meta (SPEC.md §6.2).
+  lookback_days: 3
+
+models:
+  analytics_infra:
+    staging:
+      +schema: staging
+      +materialized: incremental

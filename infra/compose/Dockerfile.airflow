@@ -1,0 +1,10 @@
+FROM apache/airflow:3.0.3-python3.12
+ENV PIP_NO_CACHE_DIR=1
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends gcc \
+    && rm -rf /var/lib/apt/lists/*
+USER airflow
+# The loader library is installed into the image; DAGs import it rather than vendoring logic,
+# so the same code is unit-tested outside Airflow (SPEC.md §12).
+COPY --chown=airflow platform/loader /opt/loader
+RUN pip install "/opt/loader[kafka]"
