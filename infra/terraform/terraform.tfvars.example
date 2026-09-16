@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars (git-ignored). The token comes from the environment instead:
+#   export TF_VAR_hcloud_token="$(sops -d ../../secrets/prod.yaml | yq .hcloud_token)"
+
+# Your own address, not 0.0.0.0/0. The public reaches the platform through Caddy on 80/443;
+# port 22 is administrative.
+admin_ipv4_cidrs = ["203.0.113.4/32"]
+
+ssh_public_keys = [
+  "ssh-ed25519 AAAAC3Nza... you@example.com",
+]
+
+domain = "platform.example.com"
+
+# Defaults are cx42 / 100 GB ≈ EUR 21/month. `terraform output monthly_cost_estimate_eur`
+# reports the figure for whatever you set here.
+# server_type    = "cx42"
+# volume_size_gb = 100

@@ -56,6 +56,43 @@ ps: ## Show container status
 ddl: ## Re-apply warehouse DDL (idempotent)
 	$(COMPOSE) run --rm warehouse-init
 
+## --- infrastructure ---------------------------------------------------------
+
+TF := terraform -chdir=infra/terraform
+
+infra-check: ## Validate everything that describes the live instance (no cloud calls)
+	$(TF) init -backend=false -input=false >/dev/null
+	$(TF) validate
+	$(TF) fmt -check -recursive
+	DOMAIN=example.com ACME_EMAIL=ops@example.com DEMO_PASSCODE_HASH='$$2a$$14$$x' \
+		caddy validate --config infra/caddy/Caddyfile --adapter caddyfile
+	actionlint .github/workflows/*.yml
+	./scripts/check-secrets.sh
+
+plan: ## Show what would change on the live instance (reads cloud state; creates nothing)
+	$(TF) init -backend-config=backend.hcl -input=false
+	$(TF) plan
+
+apply: ## CREATES BILLABLE RESOURCES (~EUR 21/month). Asks for confirmation.
+	$(TF) apply
+
+destroy: ## Destroys the live instance and its volume. The data goes with it.
+	$(TF) destroy
+
+cost: ## Print the monthly cost estimate for the current configuration
+	$(TF) output monthly_cost_estimate_eur
+
+## --- secrets ----------------------------------------------------------------
+
+secrets-edit: ## Decrypt, open in $$EDITOR, re-encrypt on save
+	sops secrets/prod.yaml
+
+secrets-encrypt: ## Encrypt a freshly written secrets/prod.yaml in place
+	sops -e -i secrets/prod.yaml
+
+secrets-check: ## Fail if any plaintext secret is about to be committed
+	./scripts/check-secrets.sh
+
 ## --- history and golden snapshots ---
 
 history: ## Seed 12 months of history into the backfill topics (see --estimate-only first)
@@ -80,5 +117,6 @@ load-once: ## Run one micro-batch load outside Airflow, against the running stac
 dbt: ## Build the dbt models against the running warehouse
 	cd dbt && $(UV) run --with dbt-postgres dbt build --profiles-dir .
 
-.PHONY: help install test test-all test-slowest test-alerts lint fmt up up-full down nuke logs ps ddl load-once dbt \
+.PHONY: help install test test-all test-slowest test-alerts infra-check plan apply destroy cost \
+	secrets-edit secrets-encrypt secrets-check lint fmt up up-full down nuke logs ps ddl load-once dbt \
 	history history-estimate golden restore

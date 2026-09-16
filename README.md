@@ -5,11 +5,11 @@ data, duplicates, schema drift, connector outages, crashes mid-commit, erasure r
 
 Full design: [SPEC.md](SPEC.md). Decisions: [docs/adr](docs/adr).
 
-> **Status: M6 (observability).** The platform now reports on itself: data-quality checks for
-> the failures where every row is valid and the shape is wrong, freshness measured against SLOs
-> that live in the warehouse, and fourteen alert rules — each with a unit test proving it fires
-> on its condition and stays quiet on the near misses, and each with a runbook.
-> Next: M7 (Terraform, deploy pipeline, sops, the live instance).
+> **Status: M7 (infrastructure), partially complete.** Terraform, Caddy, sops secrets and the
+> deploy pipeline are written and validated by the real tools in CI. The live instance is
+> **not up**: `terraform apply` creates billable resources and is a deliberate human action —
+> see [docs/deployment.md](docs/deployment.md).
+> Next: M8 (Platform Console, the four chaos scenarios, incident write-ups).
 
 ## The idea in one paragraph
 
@@ -26,6 +26,8 @@ make install         # uv workspace
 make test            # 119 fast tests, ~2 min (embedded Postgres, incl. logical replication)
 make test-all        # + 27 that invoke dbt for real, ~4 min
 make test-alerts     # alert rule unit tests (promtool) + Alertmanager config check
+make infra-check     # terraform validate/fmt, caddy validate, actionlint, secrets check
+make cost            # what the current infrastructure configuration costs per month
 make history-estimate  # what a 12-month seed would cost, without producing anything
 make up              # core stack (~4 GB): Redpanda, warehouse, Airflow, collector, simulator
 ```
@@ -97,6 +99,8 @@ load exactly once.
 | `platform/reverse_etl/` | Activation: diffing, idempotency keys, and the failure taxonomy |
 | `platform/dq/` | Volume anomalies, duplicate/quarantine rates, freshness against SLOs |
 | `infra/monitoring/` | Prometheus rules **and their unit tests**, Alertmanager, dashboards |
+| `infra/terraform/` | The live instance: server, volume, firewall, cloud-init, cost output |
+| `infra/caddy/` | TLS and the public/passcode split |
 | `docs/runbooks/` | One per alert: symptom, the queries to run, the fix, and what not to do |
 | `platform/opsctl/` | Golden snapshots: what to capture, how stale is too stale, restore order |
 | `infra/golden/` | The docker half of snapshot and restore |
@@ -112,6 +116,8 @@ load exactly once.
 - **[ADR 0003](docs/adr/0003-history-backfill-and-golden-snapshots.md)** — why replayed history
   gets its own topics, why the cutoff measures load lag, and why a reset catches up instead of
   leaving a hole.
+- **[docs/deployment.md](docs/deployment.md)** — what it costs, the teardown discipline that
+  keeps it from becoming a surprise invoice, and what has and has not been verified.
 - **[Alert rules](infra/monitoring/rules/platform.yml)** and
   **[their tests](infra/monitoring/rules_test.yml)** — the near-miss cases are the interesting
   half: a micro-batch lag sawtooth, an idle source, a 1% reverse-ETL error rate. None of them

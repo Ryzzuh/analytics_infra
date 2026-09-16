@@ -1,0 +1,65 @@
+#cloud-config
+# First-boot provisioning (SPEC.md §13).
+#
+# Just enough to make the box a deploy target: mount the data volume, install Docker, create the
+# deploy user. Everything else arrives through the deploy pipeline, so rebuilding this server is
+# a few minutes rather than an archaeology exercise.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - zstd
+  - jq
+  - unattended-upgrades
+
+users:
+  - name: deploy
+    groups: [docker, sudo]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    ssh_authorized_keys: []  # populated from the server's ssh_keys by cloud-init's default user
+
+write_files:
+  - path: /etc/docker/daemon.json
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {"max-size": "20m", "max-file": "3"},
+        "data-root": "/data/docker"
+      }
+  - path: /etc/systemd/system/docker.service.d/wait-for-data.conf
+    content: |
+      # Docker's data-root is on the attached volume. Starting before it is mounted would make
+      # Docker quietly create a fresh data-root on the system disk and "lose" every volume.
+      [Unit]
+      RequiresMountsFor=/data
+  - path: /etc/sysctl.d/99-platform.conf
+    content: |
+      # Redpanda and Postgres both want more file handles and mmaps than the default.
+      fs.file-max = 262144
+      vm.max_map_count = 262144
+      vm.swappiness = 10
+
+runcmd:
+  # The volume is formatted by Terraform; mount it before Docker's first start.
+  - [mkdir, -p, /data]
+  - ["bash", "-c", "grep -q '/data' /etc/fstab || echo '${volume_device} /data ext4 discard,nofail,defaults 0 0' >> /etc/fstab"]
+  - [mount, -a]
+  - [mkdir, -p, /data/docker, /data/golden]
+  - ["bash", "-c", "install -m 0755 -d /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && chmod a+r /etc/apt/keyrings/docker.asc"]
+  - ["bash", "-c", "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable\" > /etc/apt/sources.list.d/docker.list"]
+  - [apt-get, update]
+  - [apt-get, install, -y, docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, docker]
+  - [usermod, -aG, docker, deploy]
+  - [mkdir, -p, /opt/analytics-infra]
+  - [chown, -R, "deploy:deploy", /opt/analytics-infra, /data/golden]
+  # Security updates apply themselves; a demo box nobody patches is a demo box that gets owned.
+  - [systemctl, enable, --now, unattended-upgrades]
+
+final_message: "platform host ready after $UPTIME seconds"

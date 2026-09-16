@@ -1,0 +1,85 @@
+# Public entry point for the live instance (SPEC.md §11).
+#
+# The access model in one place: everything that only *shows* state is public and read-only,
+# and everything that *changes* state is behind the demo passcode. A reviewer should be able to
+# see the platform working without an account, and should not be able to break it by accident.
+#
+# TLS is automatic from Let's Encrypt. {$DOMAIN} and {$DEMO_PASSCODE_HASH} come from the
+# environment — the hash is bcrypt, produced by `caddy hash-password`, so the plaintext
+# passcode is never in the repo or on the box.
+
+{
+	email {$ACME_EMAIL}
+	# Admin API off: it is unauthenticated by default and would be reachable from inside any
+	# compromised container on the same network.
+	admin off
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+(demo_passcode) {
+	basic_auth {
+		demo {$DEMO_PASSCODE_HASH}
+	}
+}
+
+{$DOMAIN} {
+	import security_headers
+	encode zstd gzip
+
+	# --- public, read-only ------------------------------------------------------------
+	# The Console's own read endpoints: status, freshness, lag, incident feed, chaos history.
+	handle /api/status* {
+		reverse_proxy control-plane:8006
+	}
+
+	handle /metrics/platform {
+		reverse_proxy metrics-exporter:8005
+	}
+
+	# The product itself, so churn scores arriving via reverse ETL are visible end to end.
+	handle /app* {
+		reverse_proxy app-api:8003
+	}
+
+	# --- public, read-only, third-party UIs --------------------------------------------
+	# Grafana runs with anonymous Viewer access, so this is safe to expose directly; the
+	# passcode would only stop people looking at dashboards, which is the point of the demo.
+	handle /grafana* {
+		reverse_proxy grafana:3000
+	}
+
+	# Airflow's UI has no read-only anonymous mode worth trusting, so the whole thing sits
+	# behind the passcode rather than relying on its own role configuration.
+	handle /airflow* {
+		import demo_passcode
+		reverse_proxy airflow:8080
+	}
+
+	# --- passcode-protected actions ----------------------------------------------------
+	# Run pipeline, chaos injection, reset. Rate limited by the control plane itself, which
+	# also holds the Airflow token: Caddy decides who may ask, the control plane decides what
+	# actually happens (SPEC.md §11).
+	handle /api/actions* {
+		import demo_passcode
+		reverse_proxy control-plane:8006
+	}
+
+	# --- everything else ---------------------------------------------------------------
+	handle {
+		reverse_proxy control-plane:8006
+	}
+}
+
+# Plain HTTP redirects to HTTPS; nothing is served in the clear.
+http://{$DOMAIN} {
+	redir https://{host}{uri} permanent
+}

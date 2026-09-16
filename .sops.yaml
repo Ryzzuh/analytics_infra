@@ -1,0 +1,16 @@
+# sops + age (SPEC.md §13).
+#
+# Encrypted secrets are committed. That sounds alarming and is the opposite: the alternative is
+# secrets living only in someone's shell history and a GitHub Actions secret, where nobody can
+# see what exists, what changed, or when it was rotated. Here every change is a reviewable diff
+# of ciphertext, and the plaintext is readable only with an age key.
+#
+# `encrypted_regex` keeps the KEYS readable and encrypts only the VALUES, so a reviewer can see
+# that a secret was added or removed without being able to read it.
+creation_rules:
+  - path_regex: secrets/.*\.ya?ml$
+    encrypted_regex: "^(.*_token|.*_password|.*_key|.*_secret|.*_hash|.*_dsn)$"
+    # Recipients are age public keys: yours for local work, and the deploy key CI holds.
+    # Rotating a person out means removing their key here and re-encrypting.
+    age: >-
+      age1exampleq9p2m8zvxk4nxr7k0d8hgnr2p3hhy4v3lxx0ynhk4s0vqq0example

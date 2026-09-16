@@ -20,6 +20,30 @@ jobs:
       # needed and the same command runs identically on a laptop.
       - run: uv run pytest -q
 
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.3
+      # -backend=false: validation must not need cloud credentials, or it stops running on PRs
+      # from anyone who does not have them.
+      - run: terraform init -backend=false -input=false
+        working-directory: infra/terraform
+      - run: terraform validate
+        working-directory: infra/terraform
+      - run: terraform fmt -check -recursive
+        working-directory: infra/terraform
+      - name: Validate the Caddyfile
+        run: |
+          curl -sSL https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_amd64.tar.gz | tar xz caddy
+          DOMAIN=example.com ACME_EMAIL=ops@example.com DEMO_PASSCODE_HASH='$2a$14$x' \
+            ./caddy validate --config infra/caddy/Caddyfile --adapter caddyfile
+      - uses: rhysd/actionlint@main
+      - name: No plaintext secrets
+        run: ./scripts/check-secrets.sh
+
   alert-rules:
     runs-on: ubuntu-latest
     steps:

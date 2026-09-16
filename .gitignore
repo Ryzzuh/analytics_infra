@@ -8,3 +8,15 @@ dbt/dbt_packages/
 dbt/logs/
 .env
 *.tar.zst
+
+# Terraform: local state, provider binaries, and the real variable files
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/backend.hcl
+infra/terraform/terraform.tfvars
+infra/terraform/.terraform.lock.hcl
+
+# age private keys. The public keys in .sops.yaml are fine to commit; these are not.
+*.age
+age-key.txt

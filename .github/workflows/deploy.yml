@@ -1,0 +1,164 @@
+name: Deploy
+
+# Deploys on a push to main, once the tests that guard correctness have passed (SPEC.md §13).
+#
+# Images are built and pushed here, then the box pulls them: building on a 16 GB server that is
+# also running the whole platform is how a deploy takes the platform down.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy (defaults to main)
+        required: false
+        type: string
+
+concurrency:
+  # One deploy at a time, and never cancel one in flight: a half-rolled-out compose stack is
+  # worse than a queued deploy.
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: [collector, simulator, billing_mock, webhook_receiver, app_api, metrics_exporter, alert_bridge]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/compose/Dockerfile.service
+          build-args: SERVICE=${{ matrix.service }}
+          # Tagged with the commit SHA, never only `latest`: a rollback needs a name to roll
+          # back to, and "latest" is not one.
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest
+          push: true
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  build-airflow:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push airflow
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/compose/Dockerfile.airflow
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/airflow:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}/airflow:latest
+          push: true
+          cache-from: type=gha,scope=airflow
+          cache-to: type=gha,mode=max,scope=airflow
+
+  deploy:
+    needs: [build, build-airflow]
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Decrypt secrets
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          curl -sSL -o /usr/local/bin/sops \
+            https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
+          chmod +x /usr/local/bin/sops
+          sops -d secrets/prod.yaml > /tmp/prod.env.yaml
+
+      - name: Render the deploy environment
+        run: |
+          python3 - <<'PY' > /tmp/.env
+          import yaml
+          values = yaml.safe_load(open("/tmp/prod.env.yaml"))
+          for key, value in values.items():
+              print(f"{key.upper()}={value}")
+          PY
+          echo "IMAGE_TAG=${{ github.sha }}" >> /tmp/.env
+
+      - name: Copy the stack definition to the host
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: deploy
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "infra/compose/*,infra/caddy/*,infra/monitoring/*,db/*,dbt/*,airflow/dags/*"
+          target: /opt/analytics-infra
+          overwrite: true
+
+      - name: Deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: deploy
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # Health-checked rollout: pull first so the swap is fast, then bring services up and
+          # verify. A deploy that "succeeded" while the stack is unhealthy is worse than one
+          # that failed, because nobody looks again.
+          script: |
+            set -euo pipefail
+            cd /opt/analytics-infra
+            echo "${{ github.sha }}" > DEPLOYED_SHA
+            docker compose -f infra/compose/docker-compose.yml --profile full pull
+            docker compose -f infra/compose/docker-compose.yml --profile full up -d --remove-orphans
+            for attempt in $(seq 1 30); do
+              unhealthy=$(docker compose -f infra/compose/docker-compose.yml ps --format json \
+                | python3 -c "import json,sys; print(sum(1 for l in sys.stdin if l.strip() and json.loads(l).get('Health') == 'unhealthy'))")
+              [ "$unhealthy" = "0" ] && break
+              sleep 10
+            done
+            test "$unhealthy" = "0" || { echo "services unhealthy after rollout"; exit 1; }
+            docker image prune -f --filter "until=168h"
+
+      - name: Apply warehouse DDL
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: deploy
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # Idempotent by construction (every statement is CREATE ... IF NOT EXISTS), so this
+          # runs on every deploy rather than being a step someone remembers.
+          script: |
+            cd /opt/analytics-infra
+            docker compose -f infra/compose/docker-compose.yml run --rm warehouse-init
+            docker compose -f infra/compose/docker-compose.yml run --rm app-init

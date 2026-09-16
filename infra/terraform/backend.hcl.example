@@ -1,0 +1,7 @@
+# Copy to backend.hcl (git-ignored) and run:  terraform init -backend-config=backend.hcl
+#
+# Hetzner Object Storage is S3-compatible. The credentials are an access key pair from the
+# Hetzner console, exported as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
+bucket   = "analytics-infra-tfstate"
+region   = "fsn1"
+endpoints = { s3 = "https://fsn1.your-objectstorage.com" }
