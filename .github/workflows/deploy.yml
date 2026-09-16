@@ -1,12 +1,15 @@
 name: Deploy
 
-# Deploys on a push to main, once the tests that guard correctness have passed (SPEC.md §13).
-#
 # Images are built and pushed here, then the box pulls them: building on a 16 GB server that is
-# also running the whole platform is how a deploy takes the platform down.
+# also running the whole platform is how a deploy takes the platform down (SPEC.md §13).
+#
+# Manual until there is somewhere to deploy TO. Running on every push while no instance exists
+# would burn CI minutes building eight images and then fail at the SSH step, and a workflow
+# that always fails is one people stop reading.
+#
+# To deploy on merge once the instance is up: add the `push: branches: [main]` trigger back,
+# and set DEPLOY_HOST / DEPLOY_SSH_KEY / SOPS_AGE_KEY in the repository's secrets.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
