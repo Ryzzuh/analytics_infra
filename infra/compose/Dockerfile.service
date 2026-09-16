@@ -1,9 +1,17 @@
 # One image recipe for the small FastAPI services: they differ only in which package is
-# installed and which app uvicorn runs (set by the compose `command`).
+# installed, which local platform packages it needs, and which app uvicorn runs.
 FROM python:3.12-slim
 ARG SERVICE
+# Local platform packages this service imports, as paths. Passed explicitly rather than
+# resolved from the dependency name, because pip would otherwise fetch an unrelated package of
+# the same name from PyPI — `loader`, `dq`, `drift`, `simulator` and others are all taken.
+ARG PLATFORM_DEPS=""
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
+
+COPY platform/ platform/
+RUN if [ -n "$PLATFORM_DEPS" ]; then pip install $PLATFORM_DEPS; fi
+
 COPY services/${SERVICE}/pyproject.toml services/${SERVICE}/pyproject.toml
 COPY services/${SERVICE}/src services/${SERVICE}/src
 RUN pip install ./services/${SERVICE}

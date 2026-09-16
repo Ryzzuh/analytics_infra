@@ -1,16 +1,22 @@
 [project]
-name = "simulator"
+# Distribution name is namespaced; the IMPORT name is unchanged.
+#
+# Every short name here (loader, dq, drift, collector, simulator, opsctl...) is taken on PyPI by
+# something unrelated. A plain `pip install ./services/simulator` inside a Docker image resolved
+# the bare dependency `loader` to a stranger's 2017 package and shadowed ours — the container
+# built and ran, and every import of our code silently got somebody else's.
+name = "analytics-simulator"
 version = "0.1.0"
 description = "Synthetic SaaS product: users, sessions and feature usage"
 requires-python = ">=3.12"
-dependencies = ["httpx>=0.27", "prometheus-client>=0.21", "loader"]
+dependencies = ["httpx>=0.27", "prometheus-client>=0.21", "analytics-loader"]
 
 [project.scripts]
 simulator = "simulator.main:main"
 simulator-history = "simulator.history_cli:main"
 
 [tool.uv.sources]
-loader = { workspace = true }
+analytics-loader = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

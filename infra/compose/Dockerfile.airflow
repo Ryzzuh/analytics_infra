@@ -11,10 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
 USER airflow
 
-# The loader library is installed into the image; DAGs import it rather than vendoring logic,
-# so the same code is unit-tested outside Airflow (SPEC.md §12).
-COPY --chown=airflow platform/loader /opt/loader
-RUN pip install "/opt/loader[kafka]" "astronomer-cosmos>=1.15" "dbt-postgres>=1.8"
+# Every platform package the DAGs import, installed from the local paths. Installing by name
+# would let PyPI shadow them: `loader`, `dq`, `drift` and `opsctl` are all taken by unrelated
+# projects, and the resulting image builds and runs while importing somebody else's code.
+COPY --chown=airflow platform /opt/platform
+RUN pip install \
+    "/opt/platform/loader[kafka]" \
+    /opt/platform/dq \
+    /opt/platform/drift \
+    /opt/platform/reverse_etl \
+    /opt/platform/opsctl \
+    "astronomer-cosmos>=1.15" \
+    "dbt-postgres>=1.8"
 
 COPY --chown=airflow dbt /opt/dbt
 # Build the manifest once, here. The transform DAG renders from it, so the scheduler never

@@ -1,5 +1,11 @@
 [project]
-name = "control-plane"
+# Distribution name is namespaced; the IMPORT name is unchanged.
+#
+# Every short name here (loader, dq, drift, collector, simulator, opsctl...) is taken on PyPI by
+# something unrelated. A plain `pip install ./services/simulator` inside a Docker image resolved
+# the bare dependency `loader` to a stranger's 2017 package and shadowed ours — the container
+# built and ran, and every import of our code silently got somebody else's.
+name = "analytics-control-plane"
 version = "0.1.0"
 description = "The Platform Console's API: status, pipeline runs, chaos scenarios, reset"
 requires-python = ">=3.12"
@@ -8,11 +14,11 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "httpx>=0.27",
     "psycopg[binary]>=3.2",
-    "opsctl",
+    "analytics-opsctl",
 ]
 
 [tool.uv.sources]
-opsctl = { workspace = true }
+analytics-opsctl = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

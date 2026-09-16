@@ -1,5 +1,11 @@
 [project]
-name = "billing-mock"
+# Distribution name is namespaced; the IMPORT name is unchanged.
+#
+# Every short name here (loader, dq, drift, collector, simulator, opsctl...) is taken on PyPI by
+# something unrelated. A plain `pip install ./services/simulator` inside a Docker image resolved
+# the bare dependency `loader` to a stranger's 2017 package and shadowed ours — the container
+# built and ran, and every import of our code silently got somebody else's.
+name = "analytics-billing-mock"
 version = "0.1.0"
 description = "Stripe-shaped billing provider with realistic unreliability"
 requires-python = ">=3.12"

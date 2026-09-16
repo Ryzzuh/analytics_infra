@@ -1,5 +1,11 @@
 [project]
-name = "metrics-exporter"
+# Distribution name is namespaced; the IMPORT name is unchanged.
+#
+# Every short name here (loader, dq, drift, collector, simulator, opsctl...) is taken on PyPI by
+# something unrelated. A plain `pip install ./services/simulator` inside a Docker image resolved
+# the bare dependency `loader` to a stranger's 2017 package and shadowed ours — the container
+# built and ran, and every import of our code silently got somebody else's.
+name = "analytics-metrics-exporter"
 version = "0.1.0"
 description = "Exports the platform's own health from the warehouse ops schema to Prometheus"
 requires-python = ">=3.12"

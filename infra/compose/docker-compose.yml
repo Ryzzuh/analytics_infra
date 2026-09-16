@@ -191,11 +191,13 @@ services:
   collector:
     build:
       context: ../..
-      dockerfile: infra/compose/Dockerfile.collector
+      dockerfile: infra/compose/Dockerfile.service
+      args: {SERVICE: collector}
     depends_on:
       redpanda: {condition: service_healthy}
     environment:
       REDPANDA_BOOTSTRAP: redpanda:9092
+    command: ["uvicorn", "collector.app:app", "--host", "0.0.0.0", "--port", "8000"]
     ports: ["8000:8000"]
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
@@ -205,9 +207,11 @@ services:
   simulator:
     build:
       context: ../..
-      dockerfile: infra/compose/Dockerfile.simulator
+      dockerfile: infra/compose/Dockerfile.service
+      args: {SERVICE: simulator, PLATFORM_DEPS: ./platform/loader}
     depends_on:
       collector: {condition: service_healthy}
+    command: ["simulator"]
     environment:
       COLLECTOR_URL: http://collector:8000
       SIM_ACCOUNTS: "${SIM_ACCOUNTS:-500}"
@@ -350,7 +354,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/compose/Dockerfile.service
-      args: {SERVICE: control_plane}
+      args: {SERVICE: control_plane, PLATFORM_DEPS: ./platform/opsctl}
     depends_on:
       postgres-warehouse: {condition: service_healthy}
     environment:

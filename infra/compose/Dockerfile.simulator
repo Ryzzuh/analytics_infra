@@ -1,7 +1,0 @@
-FROM python:3.12-slim
-ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
-WORKDIR /app
-COPY services/simulator/pyproject.toml services/simulator/pyproject.toml
-COPY services/simulator/src services/simulator/src
-RUN pip install ./services/simulator
-CMD ["simulator"]
