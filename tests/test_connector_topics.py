@@ -161,3 +161,19 @@ def test_the_shared_secrets_are_pinned():
     assert "airflow:8080" in env["AIRFLOW__CORE__EXECUTION_API_SERVER_URL"], (
         "workers must reach the api-server by service name, not localhost"
     )
+
+
+def test_dbt_is_pointed_at_the_warehouse_service():
+    """dbt/profiles.yml defaults to localhost:5433 — the *host* port mapping.
+
+    That default is right for running dbt from a developer machine and wrong inside every
+    container. The loaders in the same DAGs use WAREHOUSE_DSN and are unaffected, so the failure
+    looks like "dbt is broken" rather than "the environment is incomplete".
+    """
+    env = compose_config()["x-airflow-env"]
+    assert env.get("WAREHOUSE_HOST") == "postgres-warehouse", (
+        "without this dbt dials localhost:5433 from inside the container"
+    )
+    assert str(env.get("WAREHOUSE_PORT")) == "5432", (
+        "5433 is the host mapping, not the service port"
+    )

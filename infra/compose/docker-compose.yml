@@ -27,6 +27,12 @@ x-airflow-env: &airflow-env
   AIRFLOW__METRICS__STATSD_PORT: "8125"
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
   WAREHOUSE_DSN: postgresql://warehouse:warehouse@postgres-warehouse:5432/warehouse
+  # dbt/profiles.yml reads these, defaulting to localhost:5433 — the host port mapping, which is
+  # right when you run dbt from your own machine and meaningless inside a container. Without
+  # them every dbt task fails with "connection to server at localhost (::1), port 5433 failed",
+  # while the loader tasks beside them succeed, because those use WAREHOUSE_DSN instead.
+  WAREHOUSE_HOST: postgres-warehouse
+  WAREHOUSE_PORT: "5432"
   APP_DSN: postgresql://app:app@postgres-app:5432/app
   REDPANDA_BOOTSTRAP: redpanda:9092
   BILLING_API_URL: http://billing-mock:8001
