@@ -323,6 +323,7 @@ def test_every_scenario_points_at_a_runbook_that_exists():
 
 # ----------------------------------------------------------------- row factories
 
+
 @pytest.mark.parametrize("key", sorted(SCENARIOS))
 def test_recovery_works_on_a_dict_row_connection(pg_uri, conn, key):
     """The Console connects with dict rows; the tests used tuples, so positional row access in
