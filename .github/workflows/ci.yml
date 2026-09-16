@@ -36,10 +36,15 @@ jobs:
       - run: terraform fmt -check -recursive
         working-directory: infra/terraform
       - name: Validate the Caddyfile
+        env:
+          DOMAIN: example.com
+          ACME_EMAIL: ops@example.com
+          # A bcrypt hash is full of $; passing it through env rather than inline shell keeps
+          # it out of the shell's hands (and out of shellcheck's SC2016).
+          DEMO_PASSCODE_HASH: $2a$14$placeholderplaceholderplaceholderplaceholder
         run: |
           curl -sSL https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_amd64.tar.gz | tar xz caddy
-          DOMAIN=example.com ACME_EMAIL=ops@example.com DEMO_PASSCODE_HASH='$2a$14$x' \
-            ./caddy validate --config infra/caddy/Caddyfile --adapter caddyfile
+          ./caddy validate --config infra/caddy/Caddyfile --adapter caddyfile
       - uses: rhysd/actionlint@main
       - name: No plaintext secrets
         run: ./scripts/check-secrets.sh
@@ -72,7 +77,12 @@ jobs:
       # Same version the image pins, so a DAG that parses here parses there. (Locally this
       # job can only run on 3.0.3: newer Airflow needs libcst >= 1.8.2, which ships no
       # x86_64-macOS wheel.)
-      - run: pip install "apache-airflow==3.2.2" "astronomer-cosmos>=1.15" "dbt-postgres>=1.8" ./platform/loader
+      # Every platform package a DAG imports, not just the loader: a missing one fails the
+      # DAG at import time, which is exactly what this job exists to catch.
+      - run: |
+          pip install "apache-airflow==3.2.2" "astronomer-cosmos>=1.15" "dbt-postgres>=1.8" \
+            ./platform/loader ./platform/dq ./platform/drift ./platform/reverse_etl \
+            ./platform/opsctl
       - name: Build the dbt manifest the transform DAG renders from
         run: cd dbt && dbt parse --profiles-dir . --project-dir . --target local
       - name: DagBag import check

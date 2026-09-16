@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,18 @@ from fastapi.testclient import TestClient
 
 REPO = Path(__file__).resolve().parents[1]
 MONITORING = REPO / "infra" / "monitoring"
+
+
+def tool(name: str) -> str:
+    """Skip cleanly when a validator is absent.
+
+    `subprocess.run` raises FileNotFoundError before returning, so checking its stderr for
+    "executable not found" never ran — the test failed instead of skipping.
+    """
+    path = shutil.which(name)
+    if path is None:
+        pytest.skip(f"{name} not installed")
+    return path
 
 
 def alert(name: str = "LoaderStalled", **overrides) -> dict:
@@ -95,12 +108,11 @@ def test_a_telegram_outage_does_not_become_an_alert_storm(bridge, monkeypatch):
 
 def test_alertmanager_config_is_valid():
     result = subprocess.run(
-        ["amtool", "check-config", str(MONITORING / "alertmanager.yml")],
+        [tool("amtool"), "check-config", str(MONITORING / "alertmanager.yml")],
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        pytest.skip(f"amtool unavailable: {result.stderr[:120]}")
+    assert result.returncode == 0, result.stderr[-1000:]
     assert "SUCCESS" in result.stdout
 
 
@@ -145,13 +157,11 @@ def test_every_alert_rule_passes_its_unit_tests():
     """Runs promtool's own rule tests: each alert fires on its condition, and stays quiet on
     the near misses (a micro-batch lag sawtooth, an idle source, a 1% error rate)."""
     result = subprocess.run(
-        ["promtool", "test", "rules", "rules_test.yml"],
+        [tool("promtool"), "test", "rules", "rules_test.yml"],
         cwd=MONITORING,
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0 and "executable file not found" in result.stderr:
-        pytest.skip("promtool unavailable")
     assert result.returncode == 0, result.stdout[-3000:]
     assert "SUCCESS" in result.stdout
 
