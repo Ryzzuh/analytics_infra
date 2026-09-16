@@ -245,6 +245,44 @@ def test_snapshot_rows_are_marked_as_having_no_prior_history(conn, source, built
     )
 
 
+def test_reconciliation_ignores_changes_made_after_the_snapshot(conn, source, dbt_env):  # noqa: F811
+    """A live source keeps changing after the photograph is taken.
+
+    The snapshot describes one instant; CDC carries every write that happens afterwards. If the
+    check compares the snapshot against whatever is *current*, then on any running system every
+    legitimate change since the snapshot reads as a reconciliation failure — the check that
+    exists to prove CDC lost nothing fails precisely because CDC is working. Observed on the
+    running stack as 152 status and 19 seat "disagreements", all of them correct pipeline
+    behaviour.
+    """
+    trial = sub(status="trial")
+    source.produce(CDC_TOPIC, 0, change_bytes(op="c", after=trial, lsn=10, effective_at=DAY))
+
+    # The snapshot agrees with the source at the moment it was taken.
+    conn.execute(
+        "INSERT INTO raw.oltp_snapshots (snapshot_at, source_table, pk, row_data) "
+        "VALUES (%s, 'subscriptions', '1', %s)",
+        (DAY + timedelta(hours=1), json.dumps(trial)),
+    )
+
+    # ...and then the source moves on, captured correctly by CDC.
+    active = {**trial, "status": "active", "mrr_cents": 9900}
+    source.produce(
+        CDC_TOPIC,
+        0,
+        change_bytes(
+            op="u", before=trial, after=active, lsn=20, effective_at=DAY + timedelta(hours=2)
+        ),
+    )
+    load_cdc(conn, source)
+    conn.commit()
+
+    dbt("run", "--select", "stg_subscription_changes", "dim_subscription", env=dbt_env)
+    # No expect_failure: this must pass. The dimension is ahead of the snapshot, which is what
+    # a working pipeline looks like.
+    dbt("test", "--select", "assert_scd2_matches_oltp_snapshot", env=dbt_env)
+
+
 def test_reconciliation_test_fails_when_cdc_missed_a_change(conn, source, dbt_env):  # noqa: F811
     """The check that catches a slot invalidation: the warehouse says 'trial', the source says
     'active', and nothing in the CDC-derived data alone could reveal that."""

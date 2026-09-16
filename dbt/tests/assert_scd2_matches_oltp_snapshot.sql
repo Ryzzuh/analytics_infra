@@ -21,11 +21,31 @@ with latest_snapshot as (
       )
 ),
 
+-- Compared *as of the snapshot's own timestamp*, not against whatever is current now.
+--
+-- The snapshot is a photograph of the source at one instant. The source keeps being written
+-- to afterwards, and CDC keeps carrying those writes into the dimension, so `is_current`
+-- describes a later world than the snapshot does. Comparing the two makes every change since
+-- the snapshot look like a reconciliation failure: on the running stack this reported 152
+-- status and 19 seat disagreements, and every one of them was the pipeline working correctly.
+-- Compared at the snapshot's instant, the same data agreed exactly.
+--
+-- Validity intervals are what makes this exact rather than approximate, and the interval also
+-- handles deletes without a flag: a subscription deleted before the snapshot has no version
+-- covering that instant, which is precisely the agreement we want with its absence from the
+-- snapshot.
+snapshot_at as (
+    select max(snapshot_at) as at
+    from {{ source('raw', 'oltp_snapshots') }}
+    where source_table = 'subscriptions'
+),
+
 current_versions as (
-    select subscription_id, status, seats, plan_code
-    from {{ ref('dim_subscription') }}
-    where is_current
-      and not ended_by_delete
+    select d.subscription_id, d.status, d.seats, d.plan_code
+    from {{ ref('dim_subscription') }} d
+    cross join snapshot_at s
+    where s.at >= d.valid_from
+      and s.at <  d.valid_to
 ),
 
 -- Two states where this test must stay silent rather than go red:
