@@ -86,6 +86,16 @@ class Emitter:
             self._buffer = batch + self._buffer
 
 
+# The schema-drift chaos scenario (SPEC.md §9.2) "ships a release" by creating this file. A
+# flag rather than a config change, because a release is not something the platform is told
+# about — it simply starts receiving a different shape, which is the whole point.
+RENAME_FLAG = "/tmp/rename_plan_field"  # noqa: S108
+
+
+def plan_field_name() -> str:
+    return "plan_code" if os.path.exists(RENAME_FLAG) else "plan"
+
+
 def make_event(account: Account, rng: random.Random, *, event_time: datetime | None = None) -> dict:
     event_type = rng.choices(SESSION_EVENTS, weights=[60, 25, 5, 10])[0]
     return {
@@ -96,7 +106,7 @@ def make_event(account: Account, rng: random.Random, *, event_time: datetime | N
         "event_time": (event_time or datetime.now(UTC)).isoformat(),
         "payload": {
             "feature": rng.choice(FEATURES),
-            "plan": account.plan,
+            plan_field_name(): account.plan,
             "surface": rng.choice(["web", "mobile", "api"]),
             "duration_ms": int(rng.lognormvariate(6, 1)),
         },

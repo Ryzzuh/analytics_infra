@@ -20,3 +20,8 @@ infra/terraform/.terraform.lock.hcl
 # age private keys. The public keys in .sops.yaml are fine to commit; these are not.
 *.age
 age-key.txt
+
+# Console: dependencies and build output
+console/node_modules/
+console/build/
+console/.svelte-kit/

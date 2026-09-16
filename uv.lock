@@ -9,7 +9,9 @@ members = [
     "app-api",
     "billing-mock",
     "collector",
+    "control-plane",
     "dq",
+    "drift",
     "loader",
     "metrics-exporter",
     "opsctl",
@@ -63,7 +65,9 @@ dependencies = [
     { name = "app-api" },
     { name = "billing-mock" },
     { name = "collector" },
+    { name = "control-plane" },
     { name = "dq" },
+    { name = "drift" },
     { name = "loader" },
     { name = "metrics-exporter" },
     { name = "opsctl" },
@@ -86,7 +90,9 @@ requires-dist = [
     { name = "app-api", editable = "services/app_api" },
     { name = "billing-mock", editable = "services/billing_mock" },
     { name = "collector", editable = "services/collector" },
+    { name = "control-plane", editable = "services/control_plane" },
     { name = "dq", editable = "platform/dq" },
+    { name = "drift", editable = "platform/drift" },
     { name = "loader", editable = "platform/loader" },
     { name = "metrics-exporter", editable = "services/metrics_exporter" },
     { name = "opsctl", editable = "platform/opsctl" },
@@ -293,6 +299,27 @@ wheels = [
 ]
 
 [[package]]
+name = "control-plane"
+version = "0.1.0"
+source = { editable = "services/control_plane" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "opsctl" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "opsctl", editable = "platform/opsctl" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
+
+[[package]]
 name = "daff"
 version = "1.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -453,6 +480,17 @@ wheels = [
 name = "dq"
 version = "0.1.0"
 source = { editable = "platform/dq" }
+dependencies = [
+    { name = "psycopg", extra = ["binary"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "psycopg", extras = ["binary"], specifier = ">=3.2" }]
+
+[[package]]
+name = "drift"
+version = "0.1.0"
+source = { editable = "platform/drift" }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
 ]

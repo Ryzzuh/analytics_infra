@@ -73,3 +73,21 @@ CREATE TABLE IF NOT EXISTS ops.drift_findings (
 
 CREATE INDEX IF NOT EXISTS drift_findings_open_idx ON ops.drift_findings (resolved_at)
     WHERE resolved_at IS NULL;
+
+-- Observed shape of each event type (SPEC.md §7).
+--
+-- Product events are schemaless at ingest on purpose: a new payload field must never cost a
+-- client a 4xx. The cost of that choice is that nothing at the edge notices when a field
+-- disappears, so the noticing happens here instead — by recording what the data actually looks
+-- like and comparing it with what it looked like before.
+CREATE TABLE IF NOT EXISTS ops.event_shape (
+    event_type   text        NOT NULL,
+    json_path    text        NOT NULL,
+    json_type    text        NOT NULL,   -- string | number | boolean | object | array | null
+    first_seen   timestamptz NOT NULL DEFAULT now(),
+    last_seen    timestamptz NOT NULL DEFAULT now(),
+    occurrences  bigint      NOT NULL DEFAULT 0,
+    PRIMARY KEY (event_type, json_path, json_type)
+);
+
+CREATE INDEX IF NOT EXISTS event_shape_recent_idx ON ops.event_shape (event_type, last_seen DESC);

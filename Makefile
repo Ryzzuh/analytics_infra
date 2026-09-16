@@ -56,6 +56,17 @@ ps: ## Show container status
 ddl: ## Re-apply warehouse DDL (idempotent)
 	$(COMPOSE) run --rm warehouse-init
 
+## --- console ----------------------------------------------------------------
+
+console-install: ## Install the Console's dependencies
+	cd console && npm install
+
+console-build: ## Build the Console (static bundle served by Caddy)
+	cd console && npm run build
+
+console-dev: ## Run the Console against a local control plane on :8006
+	cd console && npm run dev
+
 ## --- infrastructure ---------------------------------------------------------
 
 TF := terraform -chdir=infra/terraform
@@ -117,6 +128,6 @@ load-once: ## Run one micro-batch load outside Airflow, against the running stac
 dbt: ## Build the dbt models against the running warehouse
 	cd dbt && $(UV) run --with dbt-postgres dbt build --profiles-dir .
 
-.PHONY: help install test test-all test-slowest test-alerts infra-check plan apply destroy cost \
+.PHONY: help install test test-all test-slowest test-alerts console-install console-build console-dev infra-check plan apply destroy cost \
 	secrets-edit secrets-encrypt secrets-check lint fmt up up-full down nuke logs ps ddl load-once dbt \
 	history history-estimate golden restore

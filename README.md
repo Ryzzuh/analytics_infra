@@ -5,11 +5,10 @@ data, duplicates, schema drift, connector outages, crashes mid-commit, erasure r
 
 Full design: [SPEC.md](SPEC.md). Decisions: [docs/adr](docs/adr).
 
-> **Status: M7 (infrastructure), partially complete.** Terraform, Caddy, sops secrets and the
-> deploy pipeline are written and validated by the real tools in CI. The live instance is
-> **not up**: `terraform apply` creates billable resources and is a deliberate human action —
-> see [docs/deployment.md](docs/deployment.md).
-> Next: M8 (Platform Console, the four chaos scenarios, incident write-ups).
+> **Status: M8 (Console and chaos) — the build is complete.** A status page anyone can read, four
+> chaos scenarios anyone with the passcode can run and recover, and a write-up of each. The one
+> thing still outstanding is bringing the live instance up, which costs money and is therefore a
+> human decision — see [docs/deployment.md](docs/deployment.md).
 
 ## The idea in one paragraph
 
@@ -23,11 +22,12 @@ the chaos scenarios that prove the failure paths behave.
 
 ```bash
 make install         # uv workspace
-make test            # 119 fast tests, ~2 min (embedded Postgres, incl. logical replication)
+make test            # 165 fast tests, ~2 min (embedded Postgres, incl. logical replication)
 make test-all        # + 27 that invoke dbt for real, ~4 min
 make test-alerts     # alert rule unit tests (promtool) + Alertmanager config check
 make infra-check     # terraform validate/fmt, caddy validate, actionlint, secrets check
 make cost            # what the current infrastructure configuration costs per month
+make console-build   # build the Console (static bundle, served by Caddy)
 make history-estimate  # what a 12-month seed would cost, without producing anything
 make up              # core stack (~4 GB): Redpanda, warehouse, Airflow, collector, simulator
 ```
@@ -98,6 +98,10 @@ load exactly once.
 | `infra/connect/` | Debezium connector config, with the reasoning per setting |
 | `platform/reverse_etl/` | Activation: diffing, idempotency keys, and the failure taxonomy |
 | `platform/dq/` | Volume anomalies, duplicate/quarantine rates, freshness against SLOs |
+| `platform/drift/` | Schema drift: what the payloads look like now vs before, and what breaks |
+| `services/control_plane/` | The Console's API: status, pipeline runs, chaos, reset, locking |
+| `console/` | The Console itself (SvelteKit, static) |
+| `docs/incidents/` | One write-up per chaos scenario: timeline, cost, recovery |
 | `infra/monitoring/` | Prometheus rules **and their unit tests**, Alertmanager, dashboards |
 | `infra/terraform/` | The live instance: server, volume, firewall, cloud-init, cost output |
 | `infra/caddy/` | TLS and the public/passcode split |
@@ -116,6 +120,8 @@ load exactly once.
 - **[ADR 0003](docs/adr/0003-history-backfill-and-golden-snapshots.md)** — why replayed history
   gets its own topics, why the cutoff measures load lag, and why a reset catches up instead of
   leaving a hole.
+- **[docs/incidents/](docs/incidents/)** — the four chaos scenarios as incident reviews. The
+  best single read if you want to know whether this platform does anything real.
 - **[docs/deployment.md](docs/deployment.md)** — what it costs, the teardown discipline that
   keeps it from becoming a surprise invoice, and what has and has not been verified.
 - **[Alert rules](infra/monitoring/rules/platform.yml)** and

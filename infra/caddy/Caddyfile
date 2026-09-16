@@ -73,9 +73,14 @@
 		reverse_proxy control-plane:8006
 	}
 
-	# --- everything else ---------------------------------------------------------------
+	# --- the Console itself --------------------------------------------------------------
+	# A static bundle: it reads the control plane's API from the browser, so there is nothing
+	# for a Node server to do, and one fewer always-on process on a box already running
+	# thirteen of them. try_files sends unknown paths to index.html for client-side routing.
 	handle {
-		reverse_proxy control-plane:8006
+		root * /srv/console
+		try_files {path} /index.html
+		file_server
 	}
 }
 

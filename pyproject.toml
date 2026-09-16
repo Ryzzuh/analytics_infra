@@ -10,10 +10,12 @@ dependencies = [
     "opsctl",
     "reverse-etl",
     "dq",
+    "drift",
     "billing-mock",
     "app-api",
     "metrics-exporter",
     "alert-bridge",
+    "control-plane",
 ]
 
 [dependency-groups]
@@ -31,12 +33,14 @@ members = [
     "platform/opsctl",
     "platform/reverse_etl",
     "platform/dq",
+    "platform/drift",
     "services/collector",
     "services/simulator",
     "services/billing_mock",
     "services/app_api",
     "services/metrics_exporter",
     "services/alert_bridge",
+    "services/control_plane",
 ]
 
 [tool.uv.sources]
@@ -46,10 +50,12 @@ simulator = { workspace = true }
 opsctl = { workspace = true }
 reverse-etl = { workspace = true }
 dq = { workspace = true }
+drift = { workspace = true }
 billing-mock = { workspace = true }
 app-api = { workspace = true }
 metrics-exporter = { workspace = true }
 alert-bridge = { workspace = true }
+control-plane = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

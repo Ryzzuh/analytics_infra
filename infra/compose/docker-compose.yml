@@ -346,6 +346,42 @@ services:
     profiles: [full]
     command: ["--statsd.listen-udp=:8125", "--web.listen-address=:9102"]
 
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile.service
+      args: {SERVICE: control_plane}
+    depends_on:
+      postgres-warehouse: {condition: service_healthy}
+    environment:
+      WAREHOUSE_DSN: postgresql://warehouse:warehouse@postgres-warehouse:5432/warehouse
+      AIRFLOW_URL: http://airflow:8080
+      AIRFLOW_API_TOKEN: "${AIRFLOW_API_TOKEN:-}"
+      PROMETHEUS_URL: http://prometheus:9090
+    # The control plane runs chaos scenarios by acting on the stack, so it needs the docker
+    # socket. That is a real privilege: it is why the Airflow token lives here and not in the
+    # product app, and why Caddy gates every action route behind the passcode (SPEC.md §11).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../../infra/golden/golden.sh:/app/golden.sh:ro
+    command: ["uvicorn", "control_plane.app:app", "--host", "0.0.0.0", "--port", "8006"]
+    ports: ["8006:8006"]
+
+  caddy:
+    image: caddy:2.10-alpine
+    profiles: [full]
+    depends_on: [control-plane, app-api, grafana]
+    environment:
+      DOMAIN: "${DOMAIN:-localhost}"
+      ACME_EMAIL: "${ACME_EMAIL:-}"
+      DEMO_PASSCODE_HASH: "${DEMO_PASSCODE_HASH:-}"
+    volumes:
+      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../console/build:/srv/console:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports: ["80:80", "443:443"]
+
   redpanda-console:
     image: redpandadata/console:v2.7.2
     profiles: [full]
@@ -356,6 +392,8 @@ services:
     ports: ["8090:8080"]
 
 volumes:
+  caddy-data:
+  caddy-config:
   prometheus-data:
   grafana-data:
   redpanda-data:
