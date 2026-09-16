@@ -11,7 +11,10 @@ x-airflow-env: &airflow-env
   # per-container Fernet key makes stored connections undecryptable by the process that did not
   # write them. Local development values — the deployed instance overrides both from sops
   # (SPEC.md §13).
-  AIRFLOW__API_AUTH__JWT_SECRET: "${AIRFLOW_JWT_SECRET:-KpYGvyZ9ykbToxQLWH6cc97e65acsBhOJsABxfAth3k=}"
+  # At least 64 bytes: these JWTs are signed with HS512, and a shorter key is below the length
+  # RFC 7518 §3.2 requires for SHA-512. Airflow logs it as a warning and carries on, so a 44
+  # byte secret works — it is simply weaker than the algorithm assumes.
+  AIRFLOW__API_AUTH__JWT_SECRET: "${AIRFLOW_JWT_SECRET:-2PY2ALaXhyETcM0W/KsmMqB+IP8wCejVZcshWLp/PSWwi+XPr9tV/tnKD1Ltdr3wt4vZ7zoUGOKP9SjtZIJOjw==}"
   AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY:-avFYvwAZICvOKtc0ydBJGufH4dwWpm5dWw68FpZuYW4=}"
   # Where the scheduler's workers reach the Task Execution API. The default points at
   # localhost, which is correct only when everything shares one container.

@@ -152,6 +152,11 @@ def test_the_shared_secrets_are_pinned():
     """
     env = compose_config()["x-airflow-env"]
     assert "AIRFLOW__API_AUTH__JWT_SECRET" in env
+
+    # HS512 signing: RFC 7518 §3.2 wants a key of at least the hash length. Airflow only warns
+    # and carries on, so a short secret is easy to ship without noticing.
+    secret = env["AIRFLOW__API_AUTH__JWT_SECRET"].split(":-", 1)[1].rstrip("}")
+    assert len(secret) >= 64, f"JWT secret is {len(secret)} bytes; HS512 wants >= 64"
     assert "AIRFLOW__CORE__FERNET_KEY" in env
     assert "airflow:8080" in env["AIRFLOW__CORE__EXECUTION_API_SERVER_URL"], (
         "workers must reach the api-server by service name, not localhost"
