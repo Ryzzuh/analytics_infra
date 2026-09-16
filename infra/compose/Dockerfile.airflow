@@ -14,7 +14,10 @@ USER airflow
 # Every platform package the DAGs import, installed from the local paths. Installing by name
 # would let PyPI shadow them: `loader`, `dq`, `drift` and `opsctl` are all taken by unrelated
 # projects, and the resulting image builds and runs while importing somebody else's code.
-COPY --chown=airflow platform /opt/platform
+# `airflow:root`, not a bare `airflow`: in the base image the user is uid 50000 with gid 0 and
+# there is no group of that name. BuildKit would infer the primary group; the classic builder
+# looks for a group called `airflow` and fails the build outright.
+COPY --chown=airflow:root platform /opt/platform
 RUN pip install \
     "/opt/platform/loader[kafka]" \
     /opt/platform/dq \
@@ -24,7 +27,7 @@ RUN pip install \
     "astronomer-cosmos>=1.15" \
     "dbt-postgres>=1.8"
 
-COPY --chown=airflow dbt /opt/dbt
+COPY --chown=airflow:root dbt /opt/dbt
 # Build the manifest once, here. The transform DAG renders from it, so the scheduler never
 # shells out to dbt while parsing.
 RUN cd /opt/dbt && dbt parse --profiles-dir . --project-dir . --target local || \
