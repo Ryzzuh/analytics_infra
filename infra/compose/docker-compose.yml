@@ -28,6 +28,11 @@ services:
       - --node-id 0
       - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
       - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      # Auto-creation off: with it on, the first produce silently creates the topic with ONE
+      # partition, which quietly discards the 6-partition layout redpanda-init configures and
+      # turns a typo'd topic name into a new topic rather than an error. Found by running it —
+      # the stack looked fine and product.session had one partition.
+      - --set redpanda.auto_create_topics_enabled=false
     ports: ["19092:19092", "9644:9644"]
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
@@ -151,6 +156,15 @@ services:
       CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
       APP_DB_USER: app
       APP_DB_PASSWORD: app
+      # Connect does NOT resolve ${env:...} in a connector config unless the worker declares a
+      # provider for it. Without this it passes the literal string "${env:APP_DB_USER}" as the
+      # username, and the connector fails validation with a password-authentication error that
+      # names the placeholder — which is at least an honest error message.
+      CONNECT_CONFIG_PROVIDERS: env
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      # Explicit allowlist: the provider can otherwise read every variable in the worker's
+      # environment, and a connector config is retrievable over the REST API.
+      CONNECT_CONFIG_PROVIDERS_ENV_PARAM_ALLOWLIST_PATTERN: "APP_DB_.*"
     ports: ["8083:8083"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]

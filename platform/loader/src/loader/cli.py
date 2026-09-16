@@ -17,6 +17,7 @@ import psycopg
 
 from .kafka_source import KafkaMessageSource
 from .run import run_load
+from .targets import PRODUCT_EVENTS, billing_target, cdc_target
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
     load.add_argument("--max-records", type=int, default=50_000)
     load.add_argument("--source-path", choices=["live", "backfill"], default="live")
     load.add_argument(
+        "--target",
+        choices=["product_events", "cdc", "billing"],
+        default="product_events",
+        help="Which stream this topic carries; decides parsing and destination table",
+    )
+    load.add_argument(
         "--crash-before-commit",
         action="store_true",
         help="Die with the transaction open, to prove the ledger and rows commit together",
@@ -47,6 +54,13 @@ def main(argv: list[str] | None = None) -> int:
     def crash() -> None:
         raise SystemExit("crash injected before commit")
 
+    targets = {
+        "product_events": lambda: PRODUCT_EVENTS,
+        "cdc": cdc_target,
+        "billing": billing_target,
+    }
+    target = targets[args.target]()
+
     source = KafkaMessageSource(args.bootstrap)
     try:
         with psycopg.connect(args.dsn, autocommit=False) as conn:
@@ -55,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
                 source,
                 topic=args.topic,
                 dag_run_id=args.run_id,
+                target=target,
                 max_records=args.max_records,
                 source_path=args.source_path,
                 before_commit=crash if args.crash_before_commit else None,
@@ -70,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
                 "rows_loaded": result.rows_loaded,
                 "dlq_rows": result.dlq_rows,
                 "erased_skipped": result.erased_skipped,
+                "records_skipped": result.records_skipped,
                 "partitions": [
                     {
                         "partition": p.partition_id,
