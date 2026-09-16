@@ -125,7 +125,18 @@ def parse_change(record: SourceRecord) -> CdcChange | ParseFailure | SkipRecord:
         return ParseFailure("missing_primary_key", record)
 
     source_ts = _ts_from_ms(source.get("ts_ms") or payload.get("ts_ms") or 0)
-    row_for_time = before if op == "d" else after
+    # A delete has no business time of its own. The before-image's `effective_at` records when
+    # the row last *changed*, not when it was removed, so dating the deletion by it closes the
+    # SCD2 version at the very instant that version opened: valid_from == valid_to, a
+    # zero-length interval that no `at >= valid_from and at < valid_to` predicate can ever
+    # match. The subscription then vanishes from every as-of query for the whole period it was
+    # actually alive. Observed on the running stack: two subscriptions present in the OLTP
+    # snapshot with no version covering that instant, both deleted after the snapshot was taken.
+    #
+    # Commit time is the honest answer for a deletion — unlike an insert or update, there is no
+    # surviving row to carry a business timestamp. Erasures happen in the present in any case;
+    # the historical replay produces no deletes.
+    row_for_time = None if op == "d" else after
 
     return CdcChange(
         source_table=source_table,

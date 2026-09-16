@@ -104,13 +104,28 @@ def test_three_transitions_in_one_day_are_three_versions(conn, source, built):
     assert [r[3] for r in rows] == [False, False, True]
 
 
-def test_a_delete_closes_the_interval_without_opening_a_version(conn, source, built):
+def test_a_delete_closes_the_interval_at_the_deletion_not_the_last_change(conn, source, built):
+    """A hard delete has no business time of its own.
+
+    The before-image's `effective_at` says when the row last *changed*, which for a row deleted
+    long after its last update is far earlier than the deletion. Dating the delete by it closes
+    the version at the instant that version opened — a zero-length interval that no
+    `valid_from <= t < valid_to` predicate can match, so the subscription disappears from every
+    point-in-time query covering the whole period it was actually alive.
+
+    Found on the running stack: two subscriptions present in the OLTP snapshot had no version
+    covering that instant, because both were deleted after the snapshot was taken.
+    """
     active = sub(status="active", mrr_cents=25000)
+    deleted_at = DAY + timedelta(days=30)
+
     source.produce(CDC_TOPIC, 0, change_bytes(op="c", after=active, lsn=10, effective_at=DAY))
     source.produce(
         CDC_TOPIC,
         0,
-        change_bytes(op="d", before=active, lsn=20, effective_at=DAY + timedelta(days=30)),
+        # The row's own effective_at still reads DAY — nothing modified it between creation and
+        # deletion. The deletion itself happens thirty days later, and only the commit says so.
+        change_bytes(op="d", before=active, lsn=20, effective_at=DAY, source_ts=deleted_at),
     )
     source.produce(CDC_TOPIC, 0, None, key=tombstone_key(1))
 
@@ -118,8 +133,18 @@ def test_a_delete_closes_the_interval_without_opening_a_version(conn, source, bu
 
     rows = versions(conn)
     assert len(rows) == 1
-    assert rows[0][2] == DAY + timedelta(days=30)  # closed at the deletion
-    assert rows[0][4] is True  # ended_by_delete
+    _status, valid_from, valid_to, _is_current, ended_by_delete = rows[0]
+    assert valid_to == deleted_at, "closed at the deletion, not at the row's last change"
+    assert valid_to > valid_from, "a zero-length interval is invisible to every as-of query"
+    assert ended_by_delete is True
+
+    # The subscription must be findable for the whole time it existed.
+    mid_life = conn.execute(
+        "SELECT count(*) FROM core.dim_subscription "
+        "WHERE subscription_id = 1 AND %s >= valid_from AND %s < valid_to",
+        (DAY + timedelta(days=15), DAY + timedelta(days=15)),
+    ).fetchone()[0]
+    assert mid_life == 1, "no version covers a date the subscription was plainly alive"
 
 
 def test_updates_that_change_nothing_tracked_do_not_create_versions(conn, source, built):
