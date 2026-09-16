@@ -215,6 +215,22 @@ services:
     environment: *airflow-env
     ports: ["8080:8080"]
     command: ["standalone"]
+    # `standalone` runs scheduler, api-server, triggerer and dag-processor as subprocesses and
+    # does not supervise them. When postgres-airflow was recreated and its DNS name briefly
+    # stopped resolving, the scheduler and dag-processor died on the connection error while the
+    # container carried on reporting `Up` — the triggerer kept logging, so it even looked busy.
+    # No DAG ran for twenty minutes and nothing said so.
+    #
+    # This healthcheck asks the question that actually matters: is a scheduler heartbeat still
+    # being written? Note that Docker does not restart merely-unhealthy containers, so this
+    # makes the failure *visible* (and alertable) rather than self-healing. Running the four
+    # components as separate containers is the real fix and is a deliberate open question.
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --local || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 90s
     volumes:
       - ../../airflow/dags:/opt/airflow/dags:ro
       - airflow-logs:/opt/airflow/logs
