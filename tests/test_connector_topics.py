@@ -28,9 +28,12 @@ def connector_config() -> dict:
     return json.loads(CONNECTOR.read_text())
 
 
+def compose_config() -> dict:
+    return yaml.safe_load(COMPOSE.read_text())
+
+
 def redpanda_init_command() -> str:
-    compose = yaml.safe_load(COMPOSE.read_text())
-    return compose["services"]["redpanda-init"]["command"]
+    return compose_config()["services"]["redpanda-init"]["command"]
 
 
 def created_topics() -> set[str]:
@@ -98,10 +101,58 @@ def test_connector_file_is_a_bare_config_object():
 
 
 def test_registration_is_wired_into_compose_not_just_documented():
-    compose = yaml.safe_load(COMPOSE.read_text())
-    assert "connect-init" in compose["services"], (
+    assert "connect-init" in compose_config()["services"], (
         "registering the connector by hand means `make up` yields a stack with no CDC at all"
     )
-    command = compose["services"]["connect-init"]["command"]
+    command = compose_config()["services"]["connect-init"]["command"]
     assert "--fail" in command, "curl exits 0 on an HTTP 500; a rejected config must fail loudly"
     assert "/connectors/app-cdc/config" in command, "use the idempotent config endpoint"
+
+
+def test_no_extension_key_is_defined_as_a_service():
+    """`x-` keys are ignored at the top level of the file, but not inside `services:`.
+
+    An anchor block written one level too deep becomes a service named `x-airflow-common`:
+    compose validates it, `config -q` says nothing, and `up` tries to build and start it.
+    """
+    services = compose_config()["services"]
+    stray = [name for name in services if name.startswith("x-")]
+    assert not stray, f"{stray} are anchors indented into services:, not services"
+
+
+AIRFLOW_COMPONENTS = [
+    "airflow-scheduler",
+    "airflow-apiserver",
+    "airflow-triggerer",
+    "airflow-dag-processor",
+]
+
+
+def test_each_airflow_component_can_be_seen_to_die():
+    """The reason for splitting `standalone` apart.
+
+    One process tree meant a dead scheduler left a container reporting `Up` and Docker with
+    nothing to restart. Each component now needs a healthcheck (so death is visible) and a
+    restart policy (so it is acted on).
+    """
+    services = compose_config()["services"]
+    for name in AIRFLOW_COMPONENTS:
+        assert name in services, f"{name} is missing"
+        assert "healthcheck" in services[name], f"{name} has no healthcheck; death is invisible"
+        assert services[name].get("restart") == "unless-stopped", f"{name} will not come back"
+
+
+def test_the_shared_secrets_are_pinned():
+    """Every Airflow process must agree on these, and each generates its own if unset.
+
+    A per-container JWT secret breaks the scheduler's workers against the api-server's Task
+    Execution API; a per-container Fernet key makes stored connections undecryptable. Under
+    standalone both were generated once per process tree, so neither had to be configured —
+    which is exactly why splitting the components apart is where this bites.
+    """
+    env = compose_config()["x-airflow-env"]
+    assert "AIRFLOW__API_AUTH__JWT_SECRET" in env
+    assert "AIRFLOW__CORE__FERNET_KEY" in env
+    assert "airflow:8080" in env["AIRFLOW__CORE__EXECUTION_API_SERVER_URL"], (
+        "workers must reach the api-server by service name, not localhost"
+    )

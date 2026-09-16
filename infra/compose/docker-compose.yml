@@ -4,6 +4,18 @@ name: analytics-infra
 
 x-airflow-env: &airflow-env
   AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  # These three were invisible under `airflow standalone`, which ran every component in one
+  # process and generated both secrets on the fly. Split across containers, each process would
+  # generate its own: the scheduler's task workers authenticate to the api-server's Task
+  # Execution API with a JWT, so mismatched secrets mean every task fails to start, and a
+  # per-container Fernet key makes stored connections undecryptable by the process that did not
+  # write them. Local development values — the deployed instance overrides both from sops
+  # (SPEC.md §13).
+  AIRFLOW__API_AUTH__JWT_SECRET: "${AIRFLOW_JWT_SECRET:-KpYGvyZ9ykbToxQLWH6cc97e65acsBhOJsABxfAth3k=}"
+  AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY:-avFYvwAZICvOKtc0ydBJGufH4dwWpm5dWw68FpZuYW4=}"
+  # Where the scheduler's workers reach the Task Execution API. The default points at
+  # localhost, which is correct only when everything shares one container.
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow:8080/execution/
   AIRFLOW__CORE__LOAD_EXAMPLES: "false"
   AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
   AIRFLOW__CORE__PARALLELISM: "4"
@@ -16,6 +28,28 @@ x-airflow-env: &airflow-env
   REDPANDA_BOOTSTRAP: redpanda:9092
   BILLING_API_URL: http://billing-mock:8001
   APP_API_URL: http://app-api:8003
+
+# Airflow, as four supervised containers rather than one `standalone` process.
+#
+# standalone runs scheduler, api-server, triggerer and dag-processor as child processes and
+# supervises none of them. A brief DNS failure while postgres-airflow was recreated killed the
+# scheduler and dag-processor; the container stayed `Up`, the triggerer kept logging every
+# 60s, and no DAG ran for twenty minutes without a single signal that anything was wrong.
+# Docker's restart policy could not help, because the container never exited.
+#
+# Split out, each component is a container Docker can see die and restart on its own. That is
+# the whole reason for the extra ~1.2 GB of resident memory: four Airflow processes instead of
+# one process tree. It is why the laptop profile could not have this.
+x-airflow-common: &airflow-common
+  build:
+    context: ../..
+    dockerfile: infra/compose/Dockerfile.airflow
+  environment: *airflow-env
+  volumes:
+    - ../../airflow/dags:/opt/airflow/dags:ro
+    - airflow-logs:/opt/airflow/logs
+  restart: unless-stopped
+
 
 services:
   redpanda:
@@ -203,37 +237,74 @@ services:
       retries: 10
     volumes: ["airflow-data:/var/lib/postgresql/data"]
 
-  airflow:
-    build:
-      context: ../..
-      dockerfile: infra/compose/Dockerfile.airflow
+  # Schema migration runs once, in its own container, so four components do not race to migrate
+  # the same database on a cold start.
+  airflow-init:
+    <<: *airflow-common
     depends_on:
       postgres-airflow: {condition: service_healthy}
+    command: ["db", "migrate"]
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    depends_on:
+      airflow-init: {condition: service_completed_successfully}
+    # Reachable as `airflow` so the Caddyfile, the control plane and AIRFLOW_URL keep working:
+    # renaming the service should not mean rewriting every consumer of its hostname.
+    networks:
+      default:
+        aliases: [airflow]
+    ports: ["8080:8080"]
+    command: ["api-server"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/v2/monitor/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  airflow-scheduler:
+    <<: *airflow-common
+    depends_on:
+      airflow-init: {condition: service_completed_successfully}
       postgres-warehouse: {condition: service_healthy}
       postgres-app: {condition: service_healthy}
       redpanda: {condition: service_healthy}
-    environment: *airflow-env
-    ports: ["8080:8080"]
-    command: ["standalone"]
-    # `standalone` runs scheduler, api-server, triggerer and dag-processor as subprocesses and
-    # does not supervise them. When postgres-airflow was recreated and its DNS name briefly
-    # stopped resolving, the scheduler and dag-processor died on the connection error while the
-    # container carried on reporting `Up` — the triggerer kept logging, so it even looked busy.
-    # No DAG ran for twenty minutes and nothing said so.
-    #
-    # This healthcheck asks the question that actually matters: is a scheduler heartbeat still
-    # being written? Note that Docker does not restart merely-unhealthy containers, so this
-    # makes the failure *visible* (and alertable) rather than self-healing. Running the four
-    # components as separate containers is the real fix and is a deliberate open question.
+    command: ["scheduler"]
+    # The check that was missing: is a scheduler heartbeat still being written? A scheduler that
+    # has died now takes its container down with it, and `restart: unless-stopped` brings it
+    # back, rather than leaving every DAG unpaused and idle.
     healthcheck:
       test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --local || exit 1"]
       interval: 30s
       timeout: 20s
       retries: 3
       start_period: 90s
-    volumes:
-      - ../../airflow/dags:/opt/airflow/dags:ro
-      - airflow-logs:/opt/airflow/logs
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    depends_on:
+      airflow-init: {condition: service_completed_successfully}
+    command: ["dag-processor"]
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob --local || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 90s
+
+  airflow-triggerer:
+    <<: *airflow-common
+    depends_on:
+      airflow-init: {condition: service_completed_successfully}
+    command: ["triggerer"]
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type TriggererJob --local || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 90s
 
   collector:
     build:
