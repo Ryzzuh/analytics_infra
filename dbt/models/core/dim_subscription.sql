@@ -20,11 +20,21 @@ with changes as (
     select * from {{ ref('stg_subscription_changes') }}
 ),
 
-sequenced as (
+-- Two window passes, in this order, and the order is the whole point.
+--
+-- Deciding whether a change *starts* a version means comparing it with the change before it,
+-- so `lag` runs over every change. Deciding where a version *ends* means finding the next
+-- surviving version, so `lead` must run only over the rows that survive.
+--
+-- Doing both in one pass — as this model originally did — closes each version at the next
+-- *change* rather than the next *version*. A write that touches nothing modelled then ends the
+-- current version at its own timestamp and opens nothing, so the timeline acquires a hole
+-- until the next real change, and a subscription whose latest write was a no-op has no current
+-- row at all. On real data that was 74 of 500 subscriptions with no current version, and an
+-- overlap check cannot see it: gaps are not overlaps.
+classified as (
     select
         *,
-        lead(effective_at) over w    as next_effective_at,
-        lead(op) over w              as next_op,
         lag(status) over w           as prior_status,
         lag(plan_code) over w        as prior_plan_code,
         lag(seats) over w            as prior_seats,
@@ -33,22 +43,30 @@ sequenced as (
     window w as (partition by subscription_id order by source_lsn)
 ),
 
-versions as (
+boundaries as (
     select *
-    from sequenced
+    from classified
     where
-        -- Deletes close the previous interval; they do not open a version of their own.
-        op <> 'd'
+        -- Deletes are kept here so they can close the preceding interval, and excluded from
+        -- the final select: they end a version without opening one.
+        op = 'd'
         -- CDC captures every column update, including ones that change nothing we track
         -- (a touched updated_at, say). Emitting a version for those would inflate the
         -- dimension with duplicates that differ only by timestamp.
-        and (
-            op in ('c', 'r')
-            or status is distinct from prior_status
-            or plan_code is distinct from prior_plan_code
-            or seats is distinct from prior_seats
-            or mrr_cents is distinct from prior_mrr_cents
-        )
+        or op in ('c', 'r')
+        or status is distinct from prior_status
+        or plan_code is distinct from prior_plan_code
+        or seats is distinct from prior_seats
+        or mrr_cents is distinct from prior_mrr_cents
+),
+
+versions as (
+    select
+        *,
+        lead(effective_at) over w    as next_effective_at,
+        lead(op) over w              as next_op
+    from boundaries
+    window w as (partition by subscription_id order by source_lsn)
 )
 
 select
@@ -77,3 +95,4 @@ select
     source_ts,
     source_path
 from versions
+where op <> 'd'

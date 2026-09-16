@@ -141,6 +141,51 @@ def test_updates_that_change_nothing_tracked_do_not_create_versions(conn, source
 
     assert len(versions(conn)) == 1
 
+    # The count was the easy half. A no-op update must also leave the surviving version
+    # *open*: if the window functions are computed before the no-op is filtered out, this
+    # version points at the discarded row and is closed at its timestamp, so the subscription
+    # ends up with no current version at all.
+    _status, _valid_from, valid_to, is_current, _ended = versions(conn)[0]
+    assert is_current, "a no-op update must not close the only version"
+    assert valid_to.year == 9999, f"interval closed early at {valid_to}"
+
+
+def test_a_noop_update_between_versions_leaves_no_gap(conn, source, built):
+    """Consecutive versions must abut exactly.
+
+    A gap is invisible to an overlap check and fatal to a point-in-time join: any as-of query
+    landing inside it finds no row and silently drops the subscription.
+    """
+    trial = sub(status="trial")
+    touched = {**trial, "updated_at": (DAY + timedelta(hours=1)).isoformat()}
+    active = {**trial, "status": "active", "mrr_cents": 9900}
+
+    source.produce(CDC_TOPIC, 0, change_bytes(op="c", after=trial, lsn=10, effective_at=DAY))
+    # A write that touches nothing modelled, between two real versions.
+    source.produce(
+        CDC_TOPIC,
+        0,
+        change_bytes(
+            op="u", before=trial, after=touched, lsn=20, effective_at=DAY + timedelta(hours=1)
+        ),
+    )
+    source.produce(
+        CDC_TOPIC,
+        0,
+        change_bytes(
+            op="u", before=touched, after=active, lsn=30, effective_at=DAY + timedelta(hours=2)
+        ),
+    )
+
+    built()
+
+    rows = versions(conn)
+    assert len(rows) == 2, f"expected trial and active, got {[r[0] for r in rows]}"
+    assert rows[0][2] == rows[1][1], (
+        f"gap: first version ends {rows[0][2]}, second begins {rows[1][1]}"
+    )
+    assert rows[1][3], "the latest version must be current"
+
 
 def test_a_redelivered_change_does_not_duplicate_a_version(conn, source, built):
     """At-least-once delivery means the same LSN can arrive twice."""
