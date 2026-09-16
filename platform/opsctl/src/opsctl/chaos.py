@@ -30,13 +30,19 @@ log = logging.getLogger(__name__)
 
 
 class Executor(Protocol):
-    """Whatever can act on the running stack — in production, docker compose.
+    """Whatever can act on the running stack.
 
-    A port rather than a direct subprocess call so scenarios are testable without Docker, and
-    so the Console can run them against a stack it does not share a filesystem with.
+    Three verbs rather than "run this shell command", for two reasons. It is typed — a scenario
+    cannot ask for something the executor does not support — and it does not assume the caller
+    has a docker CLI, a compose file, or the project directory. The Console runs inside a
+    container with only the Docker socket, which the original shell-out design could not use.
     """
 
-    def run(self, *args: str) -> str: ...
+    def start(self, service: str) -> str: ...
+
+    def stop(self, service: str) -> str: ...
+
+    def exec(self, service: str, *command: str) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -119,13 +125,13 @@ def inject_connector_outage(conn: Connection, executor: Executor, **_: Any) -> d
     stalled first, then the WAL warning, then critical. If it runs long enough the cap
     invalidates the slot, which is the scenario's real payload (SPEC.md §9.1).
     """
-    executor.run("compose", "stop", "connect")
+    executor.stop("connect")
     return {"stopped": "connect"}
 
 
 def recover_connector_outage(conn: Connection, executor: Executor, **_: Any) -> dict[str, Any]:
     """Restart Connect, and re-sync properly if the slot was lost while it was down."""
-    executor.run("compose", "start", "connect")
+    executor.start("connect")
 
     with conn.cursor(row_factory=tuple_row) as cur:
         cur.execute("SELECT count(*) FROM ops.cdc_gaps WHERE resolved_at IS NULL")
@@ -136,10 +142,7 @@ def recover_connector_outage(conn: Connection, executor: Executor, **_: Any) -> 
 
     # The slot was invalidated, so restarting alone leaves a hole: Debezium resumes from a
     # position whose WAL is gone. An incremental snapshot fills it (SPEC.md §9.1).
-    executor.run(
-        "compose",
-        "exec",
-        "-T",
+    executor.exec(
         "postgres-app",
         "psql",
         "-U",
@@ -161,7 +164,7 @@ def inject_schema_drift(conn: Connection, executor: Executor, **_: Any) -> dict[
     schemaless by design. The drift detector notices within the hour, and because a model
     declares the old field required, that model's staging build fails — and only that one.
     """
-    executor.run("compose", "exec", "-T", "simulator", "sh", "-c", "touch /tmp/rename_plan_field")
+    executor.exec("simulator", "sh", "-c", "touch /tmp/rename_plan_field")
     return {"released": "plan_id -> plan_code"}
 
 
@@ -171,7 +174,7 @@ def recover_schema_drift(conn: Connection, executor: Executor, **_: Any) -> dict
     In a real incident the fix is usually forward — teach the staging model to read both shapes
     during the transition — but a demo that could not be re-run would be worth little.
     """
-    executor.run("compose", "exec", "-T", "simulator", "sh", "-c", "rm -f /tmp/rename_plan_field")
+    executor.exec("simulator", "sh", "-c", "rm -f /tmp/rename_plan_field")
     conn.execute(
         "UPDATE ops.drift_findings SET resolved_at = now() "
         "WHERE resolved_at IS NULL AND json_path IN ('plan', 'plan_code')"
@@ -194,10 +197,7 @@ def inject_late_duplicate_storm(
     the lateness cutoff (events older than the tolerance are held back rather than rewriting a
     closed period).
     """
-    executor.run(
-        "compose",
-        "exec",
-        "-T",
+    executor.exec(
         "simulator",
         "python",
         "-m",
@@ -215,7 +215,9 @@ def recover_late_duplicate_storm(conn: Connection, executor: Executor, **_: Any)
     Whether to absorb the quarantined remainder is a decision, not a cleanup step — it changes
     numbers people may already have seen (SPEC.md §6.2), so it is reported rather than done.
     """
-    held = conn.execute("SELECT count(*) FROM staging.stg_product_events_quarantined").fetchone()[0]
+    with conn.cursor(row_factory=tuple_row) as cur:
+        cur.execute("SELECT count(*) FROM staging.stg_product_events_quarantined")
+        held = cur.fetchone()[0]
     return {
         "quarantined": held,
         "note": "absorb with `dbt build --select stg_product_events+ --full-refresh` if the "
@@ -232,17 +234,7 @@ def inject_poison_message(
     and the bad messages land in the DLQ with their reason rather than stalling the loader or
     being silently dropped.
     """
-    executor.run(
-        "compose",
-        "exec",
-        "-T",
-        "simulator",
-        "python",
-        "-m",
-        "simulator.storm",
-        "--poison",
-        f"--events={count}",
-    )
+    executor.exec("simulator", "python", "-m", "simulator.storm", "--poison", f"--events={count}")
     return {"poison_messages": count}
 
 

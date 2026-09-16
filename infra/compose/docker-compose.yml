@@ -222,7 +222,9 @@ services:
     build:
       context: ../..
       dockerfile: infra/compose/Dockerfile.service
-      args: {SERVICE: simulator, PLATFORM_DEPS: ./platform/loader}
+      # The [kafka] extra matters: simulator.storm produces directly to the broker for the
+      # chaos scenarios, and without it the import fails only when a scenario runs.
+      args: {SERVICE: simulator, PLATFORM_DEPS: "./platform/loader[kafka]"}
     depends_on:
       collector: {condition: service_healthy}
     command: ["simulator"]

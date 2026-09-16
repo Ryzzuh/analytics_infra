@@ -39,3 +39,22 @@ Not client lag. How long a device sat on an event is interesting; whether a day 
 already been built is about to change is actionable. That distinction is also what makes the
 backfill path necessary — replayed history is months stale by load lag and would otherwise be
 quarantined in its entirety (SPEC.md §6.2).
+
+## Observed on a real run (2026-09-16)
+
+5,000 events up to three days old, 30% of them sent twice.
+
+| Measure | Value |
+|---|---|
+| raw rows (every copy kept) | 15,376 |
+| staging rows (deduplicated) | 12,886 |
+| duplicate copies collapsed | 1,239 |
+| quarantined, held back | 1,251 |
+| worst load lag observed | 3.1 days |
+
+Both mechanisms fired at once, which is what makes this scenario worth having: dedup resolved
+the retries while the cutoff held back everything past the tolerance. The 60-model dbt build
+stayed green throughout — the storm changed the numbers, not the shape.
+
+Recovery reported the 1,251 held events and the command to absorb them, rather than running it:
+absorbing changes periods that have already been reported, so it is a decision.

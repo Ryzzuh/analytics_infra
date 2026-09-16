@@ -51,27 +51,63 @@ def warehouse() -> psycopg.Connection:
     return psycopg.connect(WAREHOUSE_DSN, autocommit=True, row_factory=dict_row)
 
 
-class ComposeExecutor:
-    """Runs docker compose on the host. Injected into scenarios so they stay testable."""
+class DockerApiExecutor:
+    """Acts on the stack through the Docker Engine API on the mounted socket.
+
+    Not `docker compose` in a subprocess: this service runs in a container that has the socket
+    and nothing else — no docker CLI, no compose file, no project directory. Shelling out looked
+    fine until the container was started, at which point every chaos injection would have failed
+    with FileNotFoundError.
+
+    Containers are found by their compose service label rather than by name, so a renamed
+    project or a scaled service does not silently address the wrong one.
+    """
 
     def __init__(self, project: str = COMPOSE_PROJECT):
+        import docker
+
         self.project = project
+        self.client = docker.from_env()
 
-    def run(self, *args: str) -> str:
-        import subprocess
-
-        result = subprocess.run(
-            ["docker", "-p", self.project, *args] if args[0] != "compose" else ["docker", *args],
-            capture_output=True,
-            text=True,
-            timeout=120,
+    def _container(self, service: str):
+        containers = self.client.containers.list(
+            all=True,
+            filters={
+                "label": [
+                    f"com.docker.compose.project={self.project}",
+                    f"com.docker.compose.service={service}",
+                ]
+            },
         )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr[-500:])
-        return result.stdout
+        if not containers:
+            raise RuntimeError(f"no container for service {service!r} in project {self.project!r}")
+        return containers[0]
+
+    def start(self, service: str) -> str:
+        self._container(service).start()
+        return f"started {service}"
+
+    def stop(self, service: str) -> str:
+        self._container(service).stop(timeout=20)
+        return f"stopped {service}"
+
+    def exec(self, service: str, *command: str) -> str:
+        result = self._container(service).exec_run(list(command), demux=False)
+        output = result.output.decode("utf-8", errors="replace")
+        if result.exit_code != 0:
+            raise RuntimeError(f"{service}: exit {result.exit_code}: {output[-500:]}")
+        return output
 
 
-executor: Any = ComposeExecutor()
+executor: Any = None
+
+
+def get_executor() -> Any:
+    """Built lazily so the service starts (and serves status) even without a Docker socket."""
+    global executor
+    if executor is None:
+        executor = DockerApiExecutor()
+    return executor
 
 
 # ----------------------------------------------------------------------- status (public)
@@ -270,7 +306,7 @@ def inject_chaos(key: str) -> dict[str, Any]:
 
         window_id = open_window(conn, scenario.key)
         try:
-            result = scenario.inject(conn, executor)
+            result = scenario.inject(conn, get_executor())
         except Exception as exc:  # noqa: BLE001 - a failed injection must not leave a window open
             close_window(conn, window_id, notes=f"injection failed: {exc}")
             raise HTTPException(status_code=502, detail=f"injection failed: {exc}") from exc
@@ -292,7 +328,7 @@ def recover_chaos(key: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"unknown scenario: {key}")
 
     with warehouse() as conn:
-        result = scenario.recover(conn, executor)
+        result = scenario.recover(conn, get_executor())
         for window in open_windows(conn):
             if window["scenario"] == key:
                 close_window(conn, window["id"], notes="recovered from the console")
@@ -310,12 +346,16 @@ def reset(confirm: str = Body(embed=True, default="")) -> dict[str, Any]:
     if confirm != "reset":
         raise HTTPException(status_code=400, detail='send {"confirm": "reset"} to proceed')
 
-    try:
-        executor.run("compose", "exec", "-T", "control-plane", "/app/golden.sh", "restore")
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"reset failed: {exc}") from exc
-
-    return {"reset": "started", "note": "restore plus catch-up takes a few minutes"}
+    # The golden script needs the host's docker and its compose file; this container has only
+    # the socket. Wiring it up properly means running the restore host-side (an operator, or a
+    # scheduled job), so the endpoint says exactly that.
+    #
+    # A button reporting "reset started" while nothing restarts would be worse than no button:
+    # the visitor would believe the instance was clean.
+    raise HTTPException(
+        status_code=501,
+        detail="reset runs on the host: ./infra/golden/golden.sh restore",
+    )
 
 
 @app.get("/health")

@@ -36,3 +36,30 @@ A detector that fires on everything gets an exception list, and then gets ignore
 field never blocks, a field seen only a handful of times is not treated as a baseline, one
 stray null is not a type change, and an event family that has gone quiet is a freshness problem
 rather than a hundred "field removed" findings.
+
+## Observed on a real run (2026-09-16)
+
+After the release, payload keys became `['duration_ms', 'feature', 'plan_code', 'surface']`.
+Nothing rejected it, nothing failed, and events kept loading — which is the point.
+
+The detector's first pass over the release window reported only:
+
+```
+field_added    feature_invoked.plan_code    blocking=False
+```
+
+**`plan` was not yet reported as removed, and that was correct.** The loader batches by load
+time, not by release, so that batch still contained pre-release events carrying `plan` — the
+field had not stopped appearing yet. One window later, on purely post-release traffic:
+
+```
+BLOCKING field_removed  feature_invoked.plan   ['stg_product_events']
+BLOCKING field_removed  api_called.plan        ['stg_product_events']
+BLOCKING field_removed  report_exported.plan   ['stg_product_events']
+```
+
+Blocking, and citing the model that declares the field required.
+
+**The lag is inherent**, not a defect: drift is detected against observed history, so a removal
+is only visible once a full window contains none of the old shape. Expect up to one window
+(an hour in production) between a release and the finding.

@@ -35,3 +35,26 @@ them in error would be invisible.
 Automatic. The DLQ *is* the recovery: the partition advanced, and the messages are kept. If the
 parser was wrong rather than the messages, fixing it and clearing the Airflow task re-reads the
 same recorded offset range and replaces those rows — no duplicates, no manual offset surgery.
+
+## Observed on a real run (2026-09-16)
+
+Five unparseable messages injected onto a live topic. The next load:
+
+```
+rows=8661 dlq=5 range=[144,8810)
+```
+
+8,661 good rows loaded, exactly five diverted, and **the partition advanced past them** —
+144 to 8810 — rather than stalling. Each landed with its reason and offset:
+
+| Offset | Reason |
+|---|---|
+| 8805 | `invalid_json: Expecting property name enclosed in double quotes` |
+| 8806 | `missing_envelope_fields: event_time,received_at` |
+| 8807 | `missing_envelope_fields: event_id,received_at` |
+| 8808 | `envelope_not_object` |
+| 8809 | `tombstone_on_event_topic` |
+
+The tombstone is the one worth noting: normal and meaningful on a CDC topic, meaningless on an
+event topic, and counted rather than ignored — a connector emitting them in error would
+otherwise be invisible.

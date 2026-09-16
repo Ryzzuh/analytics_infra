@@ -29,17 +29,26 @@ def mock_client(handler):
 
 
 class FakeExecutor:
-    """Stands in for docker compose. Records what a scenario asked the stack to do."""
+    """Stands in for the Docker API. Records what a scenario asked the stack to do."""
 
     def __init__(self, fail: bool = False):
         self.calls: list[tuple[str, ...]] = []
         self.fail = fail
 
-    def run(self, *args: str) -> str:
+    def _record(self, *args: str) -> str:
         if self.fail:
             raise RuntimeError("docker unavailable")
         self.calls.append(args)
         return ""
+
+    def start(self, service: str) -> str:
+        return self._record("start", service)
+
+    def stop(self, service: str) -> str:
+        return self._record("stop", service)
+
+    def exec(self, service: str, *command: str) -> str:
+        return self._record("exec", service, *command)
 
 
 @pytest.fixture
@@ -181,7 +190,7 @@ def test_chaos_injection_opens_a_window_and_acts_on_the_real_stack(conn, client,
     response = client.post("/api/actions/chaos/connector_outage")
 
     assert response.status_code == 200
-    assert console.executor.calls == [("compose", "stop", "connect")]
+    assert console.executor.calls == [("stop", "connect")]
     assert [w["scenario"] for w in open_windows(conn)] == ["connector_outage"]
     assert response.json()["expected_symptoms"]
 
@@ -224,7 +233,7 @@ def test_recovery_closes_the_window(conn, client, console):
 
     assert response.status_code == 200
     assert open_windows(conn) == []
-    assert ("compose", "exec", "-T", "simulator", "sh", "-c", "rm -f /tmp/rename_plan_field") in (
+    assert ("exec", "simulator", "sh", "-c", "rm -f /tmp/rename_plan_field") in (
         console.executor.calls
     )
 
@@ -237,7 +246,15 @@ def test_reset_requires_a_typed_confirmation(client):
     """It takes minutes and discards whatever the last visitor did, so it should not be one
     click away from the chaos buttons."""
     assert client.post("/api/actions/reset", json={"confirm": ""}).status_code == 400
-    assert client.post("/api/actions/reset", json={"confirm": "reset"}).status_code == 200
+
+
+def test_reset_says_it_runs_on_the_host_rather_than_pretending(client):
+    """The golden script needs the host's docker and compose file, which this container does
+    not have. A button that reports success while doing nothing is worse than no button."""
+    response = client.post("/api/actions/reset", json={"confirm": "reset"})
+
+    assert response.status_code == 501
+    assert "golden.sh" in response.json()["detail"]
 
 
 # ----------------------------------------------------------------- windows expire
@@ -302,3 +319,37 @@ def test_every_scenario_points_at_a_runbook_that_exists():
 
     for scenario in SCENARIOS.values():
         assert (repo / scenario.runbook).exists(), f"{scenario.key}: {scenario.runbook} missing"
+
+
+# ----------------------------------------------------------------- row factories
+
+@pytest.mark.parametrize("key", sorted(SCENARIOS))
+def test_recovery_works_on_a_dict_row_connection(pg_uri, conn, key):
+    """The Console connects with dict rows; the tests used tuples, so positional row access in
+    a recovery function passed every test and raised KeyError: 0 in production.
+
+    Parametrised over every scenario, because finding this twice in the same file was enough.
+    """
+    import psycopg
+    from psycopg.rows import dict_row
+
+    conn.execute("CREATE SCHEMA IF NOT EXISTS staging")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS staging.stg_product_events_quarantined (event_id uuid)"
+    )
+
+    with psycopg.connect(pg_uri, autocommit=True, row_factory=dict_row) as dict_conn:
+        result = SCENARIOS[key].recover(dict_conn, FakeExecutor())
+
+    assert isinstance(result, dict)
+
+
+@pytest.mark.parametrize("key", sorted(SCENARIOS))
+def test_injection_works_on_a_dict_row_connection(pg_uri, conn, key):
+    import psycopg
+    from psycopg.rows import dict_row
+
+    with psycopg.connect(pg_uri, autocommit=True, row_factory=dict_row) as dict_conn:
+        result = SCENARIOS[key].inject(dict_conn, FakeExecutor())
+
+    assert isinstance(result, dict)
