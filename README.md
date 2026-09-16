@@ -5,10 +5,10 @@ data, duplicates, schema drift, connector outages, crashes mid-commit, erasure r
 
 Full design: [SPEC.md](SPEC.md). Decisions: [docs/adr](docs/adr).
 
-> **Status: M3 (warehouse).** M1's event path and M2's CDC path, now modelled end to end:
-> `raw → staging → core → marts`, with `mart_account_health` producing the churn score that
-> reverse ETL will push back to the product, and dbt rendered into Airflow tasks by Cosmos.
-> Next: M4 (12-month history replay, backfill topics, golden snapshot).
+> **Status: M4 (history).** The warehouse now has a past: twelve months replayed through
+> dedicated backfill topics, a lateness cutoff that holds stale live events back instead of
+> rewriting closed periods, and golden snapshots that restore with a catch-up rather than a gap.
+> Next: M5 (billing mock, webhooks + daily reconciliation, reverse ETL).
 
 ## The idea in one paragraph
 
@@ -21,9 +21,11 @@ the chaos scenarios that prove the failure paths behave.
 ## Run it
 
 ```bash
-make install     # uv workspace
-make test        # 62 tests: embedded Postgres (incl. logical replication) + real dbt runs
-make up          # core stack (~4 GB): Redpanda, warehouse, Airflow, collector, simulator
+make install         # uv workspace
+make test            # 56 fast tests, ~1 min (embedded Postgres, incl. logical replication)
+make test-all        # + 22 that invoke dbt for real, ~3 min
+make history-estimate  # what a 12-month seed would cost, without producing anything
+make up              # core stack (~4 GB): Redpanda, warehouse, Airflow, collector, simulator
 ```
 
 Then: Airflow at http://localhost:8080, collector at http://localhost:8000,
@@ -87,6 +89,8 @@ load exactly once.
 | `dbt/` | `staging` → `core` (SCD2, facts, date spine) → `marts` |
 | `db/app/ddl/` | Source OLTP schema, publication and replica identity |
 | `infra/connect/` | Debezium connector config, with the reasoning per setting |
+| `platform/opsctl/` | Golden snapshots: what to capture, how stale is too stale, restore order |
+| `infra/golden/` | The docker half of snapshot and restore |
 | `db/warehouse/ddl/` | `ops` (ledger, DLQ, erasure) and `raw` schemas |
 | `infra/compose/` | Local and VM stack |
 
@@ -96,6 +100,9 @@ load exactly once.
   broker's offsets are only a metric.
 - **[ADR 0002](docs/adr/0002-scd2-from-the-change-log.md)** — why history comes from the change
   log rather than dbt snapshots, and why it is dated by business time.
+- **[ADR 0003](docs/adr/0003-history-backfill-and-golden-snapshots.md)** — why replayed history
+  gets its own topics, why the cutoff measures load lag, and why a reset catches up instead of
+  leaving a hole.
 - **[`mart_account_health`](dbt/models/marts/mart_account_health.sql)** — the churn score, with
   every component carrying its own reason, because a score nobody can explain cannot be acted
   on by the product that receives it.

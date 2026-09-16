@@ -31,13 +31,19 @@ def pg_uri() -> str:
 
 @pytest.fixture
 def conn(pg_uri: str):
-    """A connection to a database that is empty apart from the platform's own DDL."""
+    """A connection to a database that is empty apart from the platform's own DDL.
+
+    Autocommit, so a test's SELECT does not leave a transaction open holding ACCESS SHARE on
+    a table dbt then tries to replace — that blocks dbt forever rather than failing. The
+    loader opens its own explicit transactions (`with conn.transaction()`), so the invariants
+    under test are unaffected.
+    """
     with psycopg.connect(pg_uri, autocommit=False) as admin:
         admin.autocommit = True
         # dbt-created schemas are dropped too, or one test's models leak into the next.
         for schema in ("raw", "ops", "staging", "core", "marts"):
             admin.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-    with psycopg.connect(pg_uri, autocommit=False) as connection:
+    with psycopg.connect(pg_uri, autocommit=True) as connection:
         apply_ddl(connection)
         yield connection
 
@@ -90,6 +96,6 @@ def app_conn(app_pg_uri: str):
             admin.execute("SELECT pg_drop_replication_slot(%s)", (slot[0],))
         admin.execute("DROP SCHEMA public CASCADE")
         admin.execute("CREATE SCHEMA public")
-    with psycopg.connect(app_pg_uri, autocommit=False) as connection:
+    with psycopg.connect(app_pg_uri, autocommit=True) as connection:
         apply_ddl(connection, Path(__file__).resolve().parents[1] / "db" / "app" / "ddl")
         yield connection

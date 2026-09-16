@@ -40,6 +40,14 @@ models:
               arguments:
                 values: ['c', 'u', 'd', 'r']
 
+  - name: stg_product_events_quarantined
+    description: >
+      Live events held back by the lateness cutoff. Feeds the quarantine-rate metric and the
+      Console; absorbed into staging only by an explicit full refresh.
+    columns:
+      - name: event_id
+        tests: [not_null]
+
   - name: stg_product_events
     description: >
       Typed and deduplicated product events. One row per event_id, keeping the first arrival.

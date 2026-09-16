@@ -14,6 +14,8 @@ from loader.targets import cdc_target
 from loader.testing import change_bytes, event_bytes
 from test_dbt_staging import dbt, dbt_env  # noqa: F401  (fixture reuse)
 
+pytestmark = pytest.mark.dbt  # these invoke dbt for real
+
 EVENTS_TOPIC = "product.feature_usage"
 CDC_TOPIC = "cdc.app.public.subscriptions"
 INVOICE_TOPIC = "cdc.app.public.invoices"
@@ -50,7 +52,7 @@ def account(account_id: int, **overrides) -> dict:
 def warehouse(conn, source, dbt_env):  # noqa: F811
     """Loads every produced topic, then builds the whole project."""
 
-    def _build():
+    def _build(load_at: datetime | None = None):
         for topic, target in (
             (EVENTS_TOPIC, None),
             (CDC_TOPIC, cdc_target()),
@@ -68,6 +70,7 @@ def warehouse(conn, source, dbt_env):  # noqa: F811
                 topic=topic,
                 partition_id=0,
                 dag_run_id=f"run-{topic}",
+                now=load_at,
                 **kwargs,
             )
         conn.commit()
@@ -252,11 +255,16 @@ def test_mrr_survives_a_later_cancellation(conn, source, warehouse):
 
 
 def test_a_late_event_updates_the_day_it_happened(conn, source, warehouse, dbt_env):  # noqa: F811
-    """The daily aggregate keys off event_time, not load time, so a three-day-old event
-    rebuilds its own day rather than inflating today."""
+    """The daily aggregate keys off event_time, not load time, so a two-day-old event rebuilds
+    its own day rather than inflating today.
+
+    Load times are simulated alongside the data: an event dated March but loaded today is six
+    months stale by load lag, and the cutoff would hold it back — correctly, but that is the
+    quarantine behaviour, not this one (SPEC.md §6.2).
+    """
     seed_account(source, 1, lsn=10)
     emit_activity(source, 1, day=DAY, count=4)
-    warehouse()
+    warehouse(load_at=DAY + timedelta(hours=1))
 
     before = conn.execute(
         "SELECT events FROM core.fct_account_activity_daily "
@@ -275,8 +283,14 @@ def test_a_late_event_updates_the_day_it_happened(conn, source, warehouse, dbt_e
             payload={"feature": "export", "surface": "mobile", "duration_ms": 90},
         ),
     )
-    load_partition(conn, source, topic=EVENTS_TOPIC, partition_id=0, dag_run_id="late-run")
-    conn.commit()
+    load_partition(
+        conn,
+        source,
+        topic=EVENTS_TOPIC,
+        partition_id=0,
+        dag_run_id="late-run",
+        now=DAY + timedelta(days=2),  # arrived two days late: inside the tolerance window
+    )
     dbt("build", "--select", "stg_product_events+", env=dbt_env)
 
     after = conn.execute(

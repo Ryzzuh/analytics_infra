@@ -15,6 +15,8 @@ from loader.targets import cdc_target
 from loader.testing import change_bytes, tombstone_key
 from test_dbt_staging import dbt, dbt_env  # noqa: F401  (fixture reuse)
 
+pytestmark = pytest.mark.dbt  # these invoke dbt for real
+
 CDC_TOPIC = "cdc.app.public.subscriptions"
 DAY = datetime(2026, 3, 4, tzinfo=UTC)
 

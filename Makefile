@@ -11,8 +11,14 @@ help: ## Show available targets
 install: ## Sync the uv workspace
 	$(UV) sync
 
-test: ## Run the test suite (embedded Postgres, no Docker required)
+test: ## Fast tests: loader, CDC, collector, replication, golden (embedded Postgres, no Docker)
+	$(UV) run pytest -m "not dbt"
+
+test-all: ## Every test, including the dbt builds (slower: real dbt runs per test)
 	$(UV) run pytest
+
+test-slowest: ## Show which tests dominate the runtime
+	$(UV) run pytest --durations=15 -q
 
 lint: ## ruff check + format check
 	$(UV) run ruff check .
@@ -45,6 +51,20 @@ ps: ## Show container status
 ddl: ## Re-apply warehouse DDL (idempotent)
 	$(COMPOSE) run --rm warehouse-init
 
+## --- history and golden snapshots ---
+
+history: ## Seed 12 months of history into the backfill topics (see --estimate-only first)
+	$(UV) run simulator-history --days 365
+
+history-estimate: ## Report how many events a history seed would produce, and produce none
+	$(UV) run simulator-history --days 365 --estimate-only
+
+golden: ## Take a cold golden snapshot of every volume
+	./infra/golden/golden.sh snapshot
+
+restore: ## Restore the golden snapshot, then catch up the gap
+	./infra/golden/golden.sh restore
+
 ## --- pipeline ---------------------------------------------------------------
 
 load-once: ## Run one micro-batch load outside Airflow, against the running stack
@@ -55,4 +75,5 @@ load-once: ## Run one micro-batch load outside Airflow, against the running stac
 dbt: ## Build the dbt models against the running warehouse
 	cd dbt && $(UV) run --with dbt-postgres dbt build --profiles-dir .
 
-.PHONY: help install test lint fmt up up-full down nuke logs ps ddl load-once dbt
+.PHONY: help install test test-all test-slowest lint fmt up up-full down nuke logs ps ddl load-once dbt \
+	history history-estimate golden restore

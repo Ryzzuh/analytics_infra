@@ -170,3 +170,26 @@ def change_bytes(
 def tombstone_key(pk: int | str, column: str = "id") -> bytes:
     """The key a tombstone carries: the row's primary key, with a null value."""
     return json.dumps({column: pk}).encode()
+
+
+class FakeMessageSink:
+    """Collects produced messages, and can feed them straight into a FakeMessageSource.
+
+    Lets history generation be tested end to end — generate, load, model — with no broker.
+    """
+
+    def __init__(self, source: FakeMessageSource | None = None, partitions: int = 1):
+        self.source = source or FakeMessageSource()
+        self.partitions = partitions
+        self.sent = 0
+        self.flushed = 0
+
+    def send(self, topic: str, value: bytes, *, key: bytes | None = None) -> None:
+        # Mirrors Kafka's default partitioner closely enough for ordering tests: the same key
+        # always lands on the same partition.
+        partition = 0 if key is None or self.partitions == 1 else hash(key) % self.partitions
+        self.source.produce(topic, partition, value, key=key)
+        self.sent += 1
+
+    def flush(self) -> None:
+        self.flushed += 1
