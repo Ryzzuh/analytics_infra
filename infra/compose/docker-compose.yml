@@ -71,7 +71,12 @@ services:
       - max_wal_size=2GB
     ports: ["5433:5432"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U warehouse"]
+      # -h 127.0.0.1 forces the check over TCP. Without it pg_isready uses the unix socket,
+      # which answers during first-run initdb while the server is still socket-only — so the
+      # container reports healthy, dependents start, and their TCP connections are refused.
+      # Only ever visible on a fresh volume, which is why it survived every run on an
+      # already-initialised database.
+      test: ["CMD-SHELL", "pg_isready -U warehouse -h 127.0.0.1"]
       interval: 5s
       retries: 10
     volumes:
@@ -118,7 +123,7 @@ services:
       - shared_buffers=256MB
     ports: ["5434:5432"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app"]
+      test: ["CMD-SHELL", "pg_isready -U app -h 127.0.0.1"]
       interval: 5s
       retries: 10
     volumes:
@@ -181,7 +186,7 @@ services:
       POSTGRES_DB: airflow
     command: [postgres, -c, shared_buffers=128MB]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      test: ["CMD-SHELL", "pg_isready -U airflow -h 127.0.0.1"]
       interval: 5s
       retries: 10
     volumes: ["airflow-data:/var/lib/postgresql/data"]
@@ -392,9 +397,15 @@ services:
     profiles: [full]
     depends_on: [control-plane, app-api, grafana]
     environment:
+      # These defaults must be *valid*, not merely present. Caddy's `{$VAR:default}` fills in
+      # only when a variable is unset, and compose set both of these to "" — so the default
+      # never applied: `email` with an empty argument fails to parse, and an empty bcrypt hash
+      # fails basicauth provisioning. Either one stops Caddy outright.
       DOMAIN: "${DOMAIN:-localhost}"
-      ACME_EMAIL: "${ACME_EMAIL:-}"
-      DEMO_PASSCODE_HASH: "${DEMO_PASSCODE_HASH:-}"
+      ACME_EMAIL: "${ACME_EMAIL:-admin@localhost}"
+      # bcrypt of "demo" — a local convenience only. The deployed instance overrides this from
+      # sops (SPEC.md §13); the plaintext passcode is never in the repo.
+      DEMO_PASSCODE_HASH: "${DEMO_PASSCODE_HASH:-$$2a$$14$$pKTcuJ.wurPLeZ3eoCdEy.bMTc4YsS7CDSJMweHTd.Xd9klXsW3n6}"
     volumes:
       - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ../../console/build:/srv/console:ro

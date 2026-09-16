@@ -9,7 +9,11 @@
 # passcode is never in the repo or on the box.
 
 {
-	email {$ACME_EMAIL}
+	# The default matters: compose passes ACME_EMAIL through as "" when it is unset, and
+	# `email` with an empty argument is a parse error that takes the whole config down. Locally
+	# DOMAIN is localhost, Caddy uses its internal CA and never contacts an ACME server, so the
+	# value is unused; a real deployment sets ACME_EMAIL so expiry notices reach a human.
+	email {$ACME_EMAIL:admin@localhost}
 	# Admin API off: it is unauthenticated by default and would be reachable from inside any
 	# compromised container on the same network.
 	admin off
