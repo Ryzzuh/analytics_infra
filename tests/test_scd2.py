@@ -187,6 +187,32 @@ def test_a_noop_update_between_versions_leaves_no_gap(conn, source, built):
     assert rows[1][3], "the latest version must be current"
 
 
+def test_ended_by_delete_is_never_null(conn, source, built):
+    """A boolean flag that is NULL on current rows silently empties its consumers.
+
+    `next_op = 'd'` is NULL — not false — for the last version of every subscription, which is
+    precisely the set every downstream consumer filters on. `where is_current and not
+    ended_by_delete` then yields NULL, WHERE discards the row, and the query returns nothing at
+    all rather than erroring. The CDC reconciliation test did exactly that: it compared the
+    source against an empty set and reported every subscription as never captured.
+    """
+    created = sub(status="trial")
+    source.produce(CDC_TOPIC, 0, change_bytes(op="c", after=created, lsn=10, effective_at=DAY))
+
+    built()
+
+    nulls = conn.execute(
+        "SELECT count(*) FROM core.dim_subscription WHERE ended_by_delete IS NULL"
+    ).fetchone()[0]
+    assert nulls == 0, f"{nulls} rows have a NULL ended_by_delete"
+
+    # The filter every consumer writes must actually return the current row.
+    survives = conn.execute(
+        "SELECT count(*) FROM core.dim_subscription WHERE is_current AND NOT ended_by_delete"
+    ).fetchone()[0]
+    assert survives == 1, "the current row must survive `is_current and not ended_by_delete`"
+
+
 def test_a_redelivered_change_does_not_duplicate_a_version(conn, source, built):
     """At-least-once delivery means the same LSN can arrive twice."""
     created = sub(status="trial")

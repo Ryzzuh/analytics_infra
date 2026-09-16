@@ -87,7 +87,13 @@ select
     -- no null handling in range predicates.
     coalesce(next_effective_at, {{ end_of_time() }}) as valid_to,
     next_op is null                                 as is_current,
-    next_op = 'd'                                   as ended_by_delete,
+    -- coalesce, because `next_op = 'd'` is NULL — not false — for the last version of every
+    -- subscription, which is exactly the set of rows anything downstream cares about. A
+    -- consumer writing the obvious `where is_current and not ended_by_delete` then gets NULL,
+    -- WHERE discards it, and the result is silently empty. That is how the CDC reconciliation
+    -- test came to compare the source against nothing and report all 500 subscriptions as
+    -- never captured.
+    coalesce(next_op = 'd', false)                  as ended_by_delete,
     -- Rows from the initial snapshot are current state, not history: nothing before them is
     -- knowable, so anything measuring "time in status" must exclude them (SPEC.md §6.1).
     is_snapshot                                     as is_initial_snapshot,
