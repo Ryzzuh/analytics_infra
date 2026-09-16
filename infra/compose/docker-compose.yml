@@ -238,6 +238,27 @@ services:
       SIM_ACCOUNTS: "${SIM_ACCOUNTS:-500}"
       SIM_RATE: "${SIM_RATE:-2}"
 
+  # The CDC source. Without this the `accounts` and `subscriptions` tables are never written
+  # to, so Debezium captures nothing and the whole CDC half of the platform — the change log,
+  # SCD2, dim_subscription — runs against a source that never changes. It is a separate
+  # container from `simulator` on purpose: that one needs the collector and no database, this
+  # one needs the database and no collector, and they should fail independently.
+  oltp-simulator:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile.service
+      args: {SERVICE: simulator, PLATFORM_DEPS: "./platform/loader[kafka]"}
+    depends_on:
+      postgres-app: {condition: service_healthy}
+      app-init: {condition: service_completed_successfully}
+    command: ["simulator-oltp"]
+    environment:
+      APP_DSN: postgresql://app:app@postgres-app:5432/app
+      SIM_ACCOUNTS: "${SIM_ACCOUNTS:-500}"
+      SIM_OLTP_INTERVAL: "${SIM_OLTP_INTERVAL:-5}"
+      SIM_OLTP_TRANSITIONS: "${SIM_OLTP_TRANSITIONS:-3}"
+      SIM_OLTP_HISTORY_DAYS: "${SIM_OLTP_HISTORY_DAYS:-0}"
+
   billing-mock:
     build:
       context: ../..

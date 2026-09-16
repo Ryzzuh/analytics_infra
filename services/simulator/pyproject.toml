@@ -9,10 +9,20 @@ name = "analytics-simulator"
 version = "0.1.0"
 description = "Synthetic SaaS product: users, sessions and feature usage"
 requires-python = ">=3.12"
-dependencies = ["httpx>=0.27", "prometheus-client>=0.21", "analytics-loader"]
+# psycopg is declared directly, not leaned on transitively through analytics-loader:
+# simulator.oltp and simulator.oltp_main import it themselves, and a dependency you import
+# should be one you declare — otherwise a change to the loader's own dependencies silently
+# breaks this package.
+dependencies = [
+    "httpx>=0.27",
+    "prometheus-client>=0.21",
+    "psycopg[binary]>=3.2",
+    "analytics-loader",
+]
 
 [project.scripts]
 simulator = "simulator.main:main"
+simulator-oltp = "simulator.oltp_main:main"
 simulator-history = "simulator.history_cli:main"
 
 [tool.uv.sources]
