@@ -3,7 +3,7 @@ name = "analytics-infra"
 version = "0.1.0"
 description = "End-to-end analytics platform demo (see SPEC.md)"
 requires-python = ">=3.12,<3.13"
-dependencies = ["loader", "collector"]
+dependencies = ["loader", "collector", "simulator"]
 
 [dependency-groups]
 dev = [
@@ -20,6 +20,7 @@ members = ["platform/loader", "services/collector", "services/simulator"]
 [tool.uv.sources]
 loader = { workspace = true }
 collector = { workspace = true }
+simulator = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

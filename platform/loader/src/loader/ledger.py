@@ -16,7 +16,7 @@ from .models import LedgerEntry
 
 _ENTRY_COLUMNS = """
     id, dag_run_id, topic, partition_id, start_offset, end_offset,
-    loaded_date, row_count, dlq_count, erased_count, attempt
+    loaded_date, row_count, dlq_count, erased_count, skipped_count, attempt
 """
 
 
@@ -81,26 +81,14 @@ def finalise(
     row_count: int,
     dlq_count: int,
     erased_count: int,
+    skipped_count: int = 0,
     bump_attempt: bool = False,
 ) -> None:
     conn.execute(
         "UPDATE ops.load_ledger SET row_count = %s, dlq_count = %s, erased_count = %s, "
-        "attempt = attempt + %s, updated_at = now() WHERE id = %s",
-        (row_count, dlq_count, erased_count, 1 if bump_attempt else 0, entry_id),
+        "skipped_count = %s, attempt = attempt + %s, updated_at = now() WHERE id = %s",
+        (row_count, dlq_count, erased_count, skipped_count, 1 if bump_attempt else 0, entry_id),
     )
-
-
-def clear_entry_data(conn: Connection, entry: LedgerEntry) -> None:
-    """Delete everything a previous attempt of this entry wrote.
-
-    `loaded_date` is in the predicate so the planner prunes to the single raw partition the
-    entry wrote into: a rerun touches one day's data, not the whole table.
-    """
-    conn.execute(
-        "DELETE FROM raw.product_events WHERE loaded_date = %s AND ledger_id = %s",
-        (entry.loaded_date, entry.id),
-    )
-    conn.execute("DELETE FROM ops.load_dlq WHERE ledger_id = %s", (entry.id,))
 
 
 def erased_account_ids(conn: Connection) -> set[int]:

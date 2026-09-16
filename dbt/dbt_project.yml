@@ -17,3 +17,6 @@ models:
     staging:
       +schema: staging
       +materialized: incremental
+    core:
+      +schema: core
+      +materialized: table

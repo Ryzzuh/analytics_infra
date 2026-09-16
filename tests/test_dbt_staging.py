@@ -50,7 +50,9 @@ def dbt_env(pg_uri: str, tmp_path: Path) -> dict[str, str]:
     }
 
 
-def dbt(*args: str, env: dict[str, str]) -> subprocess.CompletedProcess:
+def dbt(
+    *args: str, env: dict[str, str], expect_failure: bool = False
+) -> subprocess.CompletedProcess:
     result = subprocess.run(
         ["dbt", *args, "--project-dir", str(REPO / "dbt"), "--profiles-dir", str(REPO / "dbt")],
         capture_output=True,
@@ -58,6 +60,10 @@ def dbt(*args: str, env: dict[str, str]) -> subprocess.CompletedProcess:
         env=env,
         cwd=REPO,
     )
+    if expect_failure:
+        if result.returncode == 0:
+            pytest.fail(f"dbt {' '.join(args)} unexpectedly succeeded:\n{result.stdout[-3000:]}")
+        return result
     if result.returncode != 0:
         pytest.fail(
             f"dbt {' '.join(args)} failed:\n{result.stdout[-4000:]}\n{result.stderr[-2000:]}"

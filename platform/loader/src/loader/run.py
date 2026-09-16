@@ -11,6 +11,9 @@ Invariants this module exists to guarantee (SPEC.md §4.4):
 4. A rerun whose offsets have expired from the broker fails loudly instead of loading less.
 5. Erased accounts can never re-enter, on any path, because the filter is applied at load
    time rather than at purge time only.
+
+These hold for every stream, which is why the stream-specific parts (how a message parses and
+which table it lands in) live in `targets.py` and everything here stays generic.
 """
 
 from __future__ import annotations
@@ -20,67 +23,26 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 
 from psycopg import Connection
-from psycopg.types.json import Jsonb
 
 from . import ledger
 from .errors import OffsetOutOfRange
-from .models import LoadResult, ParsedEvent, ParseFailure, PartitionLoad
-from .parse import parse_record
+from .models import LoadResult, ParseFailure, PartitionLoad, SkipRecord
 from .source import MessageSource
+from .targets import PRODUCT_EVENTS, LoadTarget
 
 log = logging.getLogger(__name__)
 
-COPY_SQL = """
-COPY raw.product_events (
-    loaded_date, topic, partition_id, kafka_offset, ledger_id, event_id, account_id, user_id,
-    event_type, event_time, received_at, kafka_ts, loaded_at, source_path, payload
-) FROM STDIN
-"""
 
-
-def ensure_partition(conn: Connection, day: date) -> None:
-    """Create the raw partition for `day` if it does not exist.
+def ensure_partition(conn: Connection, target: LoadTarget, day: date) -> None:
+    """Create the target's partition for `day` if it does not exist.
 
     Cheap enough to call every run, and it means a new day never fails the first load.
     """
-    name = f"product_events_{day:%Y%m%d}"
+    schema, _, table = target.table.partition(".")
     conn.execute(
-        f"CREATE TABLE IF NOT EXISTS raw.{name} PARTITION OF raw.product_events "
+        f"CREATE TABLE IF NOT EXISTS {schema}.{table}_{day:%Y%m%d} PARTITION OF {target.table} "
         f"FOR VALUES FROM ('{day.isoformat()}') TO ('{day.fromordinal(day.toordinal() + 1)}')"
     )
-
-
-def _copy_rows(
-    conn: Connection,
-    events: list[ParsedEvent],
-    *,
-    ledger_id: int,
-    loaded_date: date,
-    loaded_at: datetime,
-    source_path: str,
-) -> None:
-    with conn.cursor().copy(COPY_SQL) as cp:
-        for ev in events:
-            r = ev.record
-            cp.write_row(
-                (
-                    loaded_date,
-                    r.topic,
-                    r.partition,
-                    r.offset,
-                    ledger_id,
-                    ev.event_id,
-                    ev.account_id,
-                    ev.user_id,
-                    ev.event_type,
-                    ev.event_time,
-                    ev.received_at,
-                    r.timestamp,
-                    loaded_at,
-                    source_path,
-                    Jsonb(ev.payload),
-                )
-            )
 
 
 def _write_dlq(conn: Connection, failures: list[ParseFailure], ledger_id: int) -> None:
@@ -112,6 +74,7 @@ def load_partition(
     topic: str,
     partition_id: int,
     dag_run_id: str,
+    target: LoadTarget = PRODUCT_EVENTS,
     max_records: int = 50_000,
     source_path: str = "live",
     now: datetime | None = None,
@@ -148,7 +111,8 @@ def load_partition(
     with conn.transaction():
         if replacing:
             entry = existing
-            ledger.clear_entry_data(conn, entry)
+            target.clear(conn, entry)
+            conn.execute("DELETE FROM ops.load_dlq WHERE ledger_id = %s", (entry.id,))
         else:
             entry = ledger.claim(
                 conn,
@@ -159,49 +123,59 @@ def load_partition(
                 end_offset=end,
                 loaded_date=loaded_date,
             )
-        ensure_partition(conn, loaded_date)
+        ensure_partition(conn, target, loaded_date)
 
-        events: list[ParsedEvent] = []
+        rows: list = []
         failures: list[ParseFailure] = []
+        skipped = 0
         for record in source.fetch(topic, partition_id, start, end):
-            parsed = parse_record(record)
+            parsed = target.parse(record)
             if isinstance(parsed, ParseFailure):
                 failures.append(parsed)
+            elif isinstance(parsed, SkipRecord):
+                # Neither data nor an error: a CDC tombstone, for instance.
+                skipped += 1
             else:
-                events.append(parsed)
+                rows.append(parsed)
 
         erased = ledger.erased_account_ids(conn)
         if erased:
-            kept = [e for e in events if e.account_id not in erased]
-            result.erased_skipped = len(events) - len(kept)
-            events = kept
+            kept = [r for r in rows if r.account_id not in erased]
+            result.erased_skipped = len(rows) - len(kept)
+            rows = kept
 
         if source_path == "backfill":
-            # Restores event_time/load-order correlation so the BRIN index stays useful in the
-            # single partition a backfill writes into (SPEC.md §5.2).
-            events.sort(key=lambda e: e.event_time)
+            # Restores correlation between the ordering column and load order, so the BRIN
+            # index stays useful in the single partition a backfill writes (SPEC.md §5.2).
+            rows.sort(key=target.sort_key)
 
-        _copy_rows(
-            conn,
-            events,
-            ledger_id=entry.id,
-            loaded_date=loaded_date,
-            loaded_at=loaded_at,
-            source_path=source_path,
-        )
+        with conn.cursor().copy(target.copy_sql) as cp:
+            for row in rows:
+                cp.write_row(
+                    target.to_row(
+                        row,
+                        ledger_id=entry.id,
+                        loaded_date=loaded_date,
+                        loaded_at=loaded_at,
+                        source_path=source_path,
+                    )
+                )
+
         _write_dlq(conn, failures, entry.id)
         ledger.finalise(
             conn,
             entry.id,
-            row_count=len(events),
+            row_count=len(rows),
             dlq_count=len(failures),
             erased_count=result.erased_skipped,
+            skipped_count=skipped,
             bump_attempt=replacing,
         )
 
         result.ledger_id = entry.id
-        result.rows_loaded = len(events)
+        result.rows_loaded = len(rows)
         result.dlq_rows = len(failures)
+        result.records_skipped = skipped
         result.attempt = entry.attempt + (1 if replacing else 0)
 
         if before_commit is not None:
@@ -223,6 +197,7 @@ def run_load(
     *,
     topic: str,
     dag_run_id: str,
+    target: LoadTarget = PRODUCT_EVENTS,
     max_records: int = 50_000,
     source_path: str = "live",
     now: datetime | None = None,
@@ -238,6 +213,7 @@ def run_load(
                 topic=topic,
                 partition_id=partition_id,
                 dag_run_id=dag_run_id,
+                target=target,
                 max_records=max_records,
                 source_path=source_path,
                 now=now,

@@ -10,8 +10,35 @@ sources:
         freshness:
           warn_after: {count: 15, period: minute}
           error_after: {count: 60, period: minute}
+      - name: cdc_changes
+        loaded_at_field: loaded_at
+        freshness:
+          warn_after: {count: 10, period: minute}
+          error_after: {count: 30, period: minute}
+      - name: oltp_snapshots
+        description: Independent daily snapshot of source state; never derived from CDC.
+
+  - name: ops
+    schema: ops
+    description: Platform bookkeeping.
+    tables:
+      - name: cdc_gaps
 
 models:
+  - name: stg_subscription_changes
+    description: Typed, redelivery-deduplicated subscription change log.
+    meta:
+      required_fields: [status, plan_code, seats, mrr_cents]
+    columns:
+      - name: subscription_id
+        tests: [not_null]
+      - name: source_lsn
+        tests: [not_null]
+      - name: op
+        tests:
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
   - name: stg_product_events
     description: >
       Typed and deduplicated product events. One row per event_id, keeping the first arrival.

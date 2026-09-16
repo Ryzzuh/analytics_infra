@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS ops.load_ledger (
     row_count     integer     NOT NULL DEFAULT 0,
     dlq_count     integer     NOT NULL DEFAULT 0,
     erased_count  integer     NOT NULL DEFAULT 0,
+    skipped_count integer     NOT NULL DEFAULT 0,   -- tombstones etc: neither data nor errors
     attempt       integer     NOT NULL DEFAULT 1,
     created_at    timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now(),

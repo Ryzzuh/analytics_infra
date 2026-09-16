@@ -45,6 +45,29 @@ class ParseFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class SkipRecord:
+    """A message that is neither data nor an error: a CDC tombstone, for instance."""
+
+    reason: str
+    record: SourceRecord
+
+
+@dataclass(frozen=True, slots=True)
+class CdcChange:
+    source_table: str
+    op: str  # c | u | d | r
+    pk: str
+    account_id: int | None
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
+    source_lsn: int
+    source_ts: datetime
+    effective_at: datetime  # business time; see cdc.py
+    is_snapshot: bool
+    record: SourceRecord
+
+
+@dataclass(frozen=True, slots=True)
 class LedgerEntry:
     id: int
     dag_run_id: str
@@ -56,6 +79,7 @@ class LedgerEntry:
     row_count: int
     dlq_count: int
     erased_count: int
+    skipped_count: int
     attempt: int
 
 
@@ -70,6 +94,7 @@ class PartitionLoad:
     rows_loaded: int = 0
     dlq_rows: int = 0
     erased_skipped: int = 0
+    records_skipped: int = 0  # tombstones and other non-data messages
     ledger_id: int | None = None
     attempt: int = 1
     replaced: bool = False
@@ -93,3 +118,7 @@ class LoadResult:
     @property
     def erased_skipped(self) -> int:
         return sum(p.erased_skipped for p in self.partitions)
+
+    @property
+    def records_skipped(self) -> int:
+        return sum(p.records_skipped for p in self.partitions)

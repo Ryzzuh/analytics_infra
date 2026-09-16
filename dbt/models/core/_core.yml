@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: dim_subscription
+    description: >
+      Type-2 history of subscriptions, derived from the CDC change log. One row per version,
+      with [valid_from, valid_to) in business time.
+    meta:
+      lateness_tolerance_days: 7
+      required_fields: [status, plan_code, seats, mrr_cents, effective_at]
+    columns:
+      - name: subscription_version_key
+        tests: [not_null, unique]
+      - name: subscription_id
+        tests: [not_null]
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              values: [trial, active, past_due, cancelled]
+      - name: valid_from
+        tests: [not_null]
+      - name: valid_to
+        tests: [not_null]

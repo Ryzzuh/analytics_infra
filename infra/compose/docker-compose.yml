@@ -9,6 +9,7 @@ x-airflow-env: &airflow-env
   AIRFLOW__CORE__PARALLELISM: "4"
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
   WAREHOUSE_DSN: postgresql://warehouse:warehouse@postgres-warehouse:5432/warehouse
+  APP_DSN: postgresql://app:app@postgres-app:5432/app
   REDPANDA_BOOTSTRAP: redpanda:9092
 
 services:
@@ -80,6 +81,76 @@ services:
     volumes: ["../../db/warehouse/ddl:/ddl:ro"]
     restart: "no"
 
+  # The source OLTP database. Separate server from the warehouse, not just a separate
+  # database: WAL is written per SERVER, so a Debezium slot here would otherwise also hold
+  # back the warehouse's COPY traffic and the slot-fill scenario would behave nothing like
+  # production (SPEC.md §2).
+  postgres-app:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
+      # The cap that protects the shared disk: past it Postgres invalidates the slot and CDC
+      # breaks, rather than WAL growing until every service on the box stops (SPEC.md §9.1).
+      - -c
+      - max_slot_wal_keep_size=5GB
+      - -c
+      - shared_buffers=256MB
+    ports: ["5434:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app"]
+      interval: 5s
+      retries: 10
+    volumes:
+      - app-data:/var/lib/postgresql/data
+      - ../../db/app/ddl:/ddl:ro
+
+  app-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres-app: {condition: service_healthy}
+    environment:
+      PGPASSWORD: app
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      'for f in /ddl/*.sql; do
+         psql -h postgres-app -U app -d app -v ON_ERROR_STOP=1 -f "$$f";
+       done'
+    volumes: ["../../db/app/ddl:/ddl:ro"]
+    restart: "no"
+
+  connect:
+    image: debezium/connect:2.7.3.Final
+    depends_on:
+      redpanda: {condition: service_healthy}
+      postgres-app: {condition: service_healthy}
+    environment:
+      BOOTSTRAP_SERVERS: redpanda:9092
+      GROUP_ID: analytics-connect
+      CONFIG_STORAGE_TOPIC: _connect_configs
+      OFFSET_STORAGE_TOPIC: _connect_offsets
+      STATUS_STORAGE_TOPIC: _connect_status
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      APP_DB_USER: app
+      APP_DB_PASSWORD: app
+    ports: ["8083:8083"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
+      interval: 15s
+      retries: 10
+
   # Airflow's own metadata DB is separate from the warehouse on purpose: its write churn must
   # not compete with loads, and WAL settings for CDC (M2) must not be dictated by Airflow.
   postgres-airflow:
@@ -102,6 +173,7 @@ services:
     depends_on:
       postgres-airflow: {condition: service_healthy}
       postgres-warehouse: {condition: service_healthy}
+      postgres-app: {condition: service_healthy}
       redpanda: {condition: service_healthy}
     environment: *airflow-env
     ports: ["8080:8080"]
@@ -147,5 +219,6 @@ services:
 volumes:
   redpanda-data:
   warehouse-data:
+  app-data:
   airflow-data:
   airflow-logs:

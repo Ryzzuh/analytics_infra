@@ -127,3 +127,46 @@ def event_bytes(
     }
     body.update(overrides)
     return json.dumps(body).encode()
+
+
+def change_bytes(
+    *,
+    op: str = "u",
+    before: dict | None = None,
+    after: dict | None = None,
+    lsn: int = 1,
+    source_table: str = "subscriptions",
+    effective_at: datetime | None = None,
+    source_ts: datetime | None = None,
+    snapshot: bool = False,
+) -> bytes:
+    """A Debezium change envelope, as the connector emits it with schemas disabled."""
+    commit_ts = source_ts or datetime.now(UTC)
+    row = before if op == "d" else after
+    if row is not None and effective_at is not None:
+        row = {**row, "effective_at": effective_at.isoformat()}
+        if op == "d":
+            before = row
+        else:
+            after = row
+    return json.dumps(
+        {
+            "before": before,
+            "after": after,
+            "op": op,
+            "ts_ms": int(commit_ts.timestamp() * 1000),
+            "source": {
+                "db": "app",
+                "schema": "public",
+                "table": source_table,
+                "lsn": lsn,
+                "ts_ms": int(commit_ts.timestamp() * 1000),
+                "snapshot": "true" if snapshot else "false",
+            },
+        }
+    ).encode()
+
+
+def tombstone_key(pk: int | str, column: str = "id") -> bytes:
+    """The key a tombstone carries: the row's primary key, with a null value."""
+    return json.dumps({column: pk}).encode()
