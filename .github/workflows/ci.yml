@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      # Postgres comes from pgserver (embedded real PostgreSQL), so no service container is
+      # needed and the same command runs identically on a laptop.
+      - run: uv run pytest -q
+
+  dag-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Catches the most common breakage: a DAG that fails to import, or a cycle. Airflow is
+      # installed only here, so the fast test job stays light.
+      - run: pip install "apache-airflow==3.0.3" ./platform/loader
+      - name: DagBag import check
+        env:
+          WAREHOUSE_DSN: postgresql://unused
+        run: |
+          python - <<'PY'
+          from airflow.models.dagbag import DagBag
+          bag = DagBag(dag_folder="airflow/dags", include_examples=False)
+          assert not bag.import_errors, bag.import_errors
+          assert bag.dags, "no DAGs found"
+          print(f"{len(bag.dags)} DAG(s) imported cleanly")
+          PY

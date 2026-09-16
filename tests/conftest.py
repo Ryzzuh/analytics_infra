@@ -34,8 +34,9 @@ def conn(pg_uri: str):
     """A connection to a database that is empty apart from the platform's own DDL."""
     with psycopg.connect(pg_uri, autocommit=False) as admin:
         admin.autocommit = True
-        admin.execute("DROP SCHEMA IF EXISTS raw CASCADE")
-        admin.execute("DROP SCHEMA IF EXISTS ops CASCADE")
+        # dbt-created schemas are dropped too, or one test's models leak into the next.
+        for schema in ("raw", "ops", "staging", "core", "marts"):
+            admin.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
     with psycopg.connect(pg_uri, autocommit=False) as connection:
         apply_ddl(connection)
         yield connection

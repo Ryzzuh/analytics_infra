@@ -21,7 +21,7 @@ the chaos scenarios that prove the failure paths behave.
 
 ```bash
 make install     # uv workspace
-make test        # 16 tests, embedded Postgres, no Docker needed
+make test        # 25 tests, embedded Postgres + real dbt run, no Docker needed
 make up          # core stack (~4 GB): Redpanda, warehouse, Airflow, collector, simulator
 ```
 
@@ -42,6 +42,12 @@ The loader's five invariants, each with a test in
 | A rerun replays its recorded range and replaces its rows | `test_rerun_replaces_rather_than_duplicating` |
 | An expired range fails loudly rather than loading less | `test_rerun_outside_retention_fails_loudly` |
 | Erased accounts cannot re-enter on any path | `test_erased_accounts_cannot_re_enter_on_any_path` |
+
+Alongside those: the collector's contract (envelope-only validation, account-keyed
+partitioning, no ack without a broker ack) in
+[tests/test_collector.py](tests/test_collector.py), and the staging model run for real against
+an embedded Postgres in [tests/test_dbt_staging.py](tests/test_dbt_staging.py). CI adds a
+DagBag import check, since Airflow itself is not a workspace dependency.
 
 Try the crash yourself against a running stack:
 
