@@ -177,3 +177,20 @@ def test_dbt_is_pointed_at_the_warehouse_service():
     assert str(env.get("WAREHOUSE_PORT")) == "5432", (
         "5433 is the host mapping, not the service port"
     )
+
+
+def test_the_makefile_passes_the_root_env_file_to_compose():
+    """`.env.example` sits at the repo root; compose looks in the compose file's directory.
+
+    Without `--env-file`, every knob in that file is silently ignored — compose falls back to the
+    defaults in docker-compose.yml and reports nothing. The symptom is a setting that appears to
+    have no effect, which is far harder to chase than an error.
+    """
+    makefile = (REPO / "Makefile").read_text()
+    compose_line = next(line for line in makefile.splitlines() if line.startswith("COMPOSE :="))
+    assert "--env-file" in compose_line, (
+        "compose will not read the repo-root .env, so .env.example does nothing"
+    )
+    assert "--project-directory" not in compose_line, (
+        "--project-directory re-bases the ../../ build contexts two levels too high"
+    )

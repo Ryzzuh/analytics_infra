@@ -1,4 +1,14 @@
-COMPOSE := docker compose -f infra/compose/docker-compose.yml
+# docker compose reads `.env` from the *project directory* — the directory holding the compose
+# file — not from the repo root, where `.env.example` tells you to put it. So every knob in that
+# file (SIM_ACCOUNTS, SIM_RATE, DOMAIN, LOADER_MAX_RECORDS...) was silently ignored: compose fell
+# back to the defaults baked into docker-compose.yml and nothing said otherwise. Found by setting
+# DOMAIN and watching Caddy carry on serving `localhost`.
+#
+# --env-file rather than --project-directory: the latter also re-bases every relative path, so
+# the `../../` build contexts resolve two levels too high and every service builds from the
+# wrong directory. Only passed when the file exists, since compose errors on a missing one.
+ENV_FILE := $(wildcard .env)
+COMPOSE := docker compose $(if $(ENV_FILE),--env-file $(ENV_FILE)) -f infra/compose/docker-compose.yml
 UV := uv
 
 .DEFAULT_GOAL := help
