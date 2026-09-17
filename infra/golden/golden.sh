@@ -87,7 +87,12 @@ cmd_restore() {
   # The file is the bare config object, so the override is a merge and the result can go
   # straight to the config endpoint. --fail is not optional: curl exits 0 on an HTTP 500, and a
   # restore that silently failed to register the connector looks identical to one that worked.
-  jq '. + {"snapshot.mode": "never"}' infra/connect/subscriptions-source.json \
+  #
+  # Python rather than jq: this script already needs python for opsctl, and jq was one more
+  # undeclared dependency that only announced itself at restore time — on a host that had never
+  # needed it, during the one operation you least want to discover a missing tool.
+  python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); c["snapshot.mode"]="never"; json.dump(c,sys.stdout)' \
+    infra/connect/subscriptions-source.json \
     | curl --fail -sS -X PUT -H 'Content-Type: application/json' --data @- \
         http://localhost:8083/connectors/app-cdc/config > /dev/null
 
