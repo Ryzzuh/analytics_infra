@@ -19,20 +19,29 @@ log() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
 # Volumes are archived through a throwaway container rather than from the host, so this works
 # the same on a Mac (where docker volumes live inside a VM) as on the Linux VM.
+# alpine does not ship zstd — the base image has tar but not the compressor, so the first real
+# snapshot died with `sh: zstd: not found` after the stack had already been stopped. Installed
+# explicitly rather than swapped for gzip: these archives are whole Postgres data directories,
+# where zstd -3 is both faster and smaller, and a restore is the moment to want that.
+ZSTD_IMAGE="alpine:3.20"
+ZSTD_INSTALL="apk add --no-cache zstd >/dev/null 2>&1 || { echo 'could not install zstd' >&2; exit 1; }"
+
 archive_volume() {
   local volume="$1" out="$2"
   docker run --rm \
     -v "${PROJECT}_${volume}:/data:ro" \
     -v "$(cd "$(dirname "$out")" && pwd):/backup" \
-    alpine:3.20 sh -c "tar -C /data -cf - . | zstd -3 -T0 -o /backup/$(basename "$out")"
+    "$ZSTD_IMAGE" sh -c "$ZSTD_INSTALL; tar -C /data -cf - . | zstd -3 -T0 -o /backup/$(basename "$out")"
 }
 
 restore_volume() {
   local volume="$1" archive="$2"
+  # The glob is anchored to /data. An unanchored `.[!.]*` matches in the container's working
+  # directory instead, which is not the volume being restored.
   docker run --rm \
     -v "${PROJECT}_${volume}:/data" \
     -v "$(cd "$(dirname "$archive")" && pwd):/backup:ro" \
-    alpine:3.20 sh -c "rm -rf /data/* /data/..?* .[!.]* 2>/dev/null; \
+    "$ZSTD_IMAGE" sh -c "$ZSTD_INSTALL; rm -rf /data/* /data/..?* /data/.[!.]* 2>/dev/null; \
                        zstd -dc /backup/$(basename "$archive") | tar -C /data -xf -"
 }
 
