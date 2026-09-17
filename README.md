@@ -62,8 +62,11 @@ And M2's, in [tests/test_scd2.py](tests/test_scd2.py) and
 | Claim | Test |
 |---|---|
 | Three transitions in one day are three SCD2 versions | `test_three_transitions_in_one_day_are_three_versions` |
-| A delete closes an interval without opening a version | `test_a_delete_closes_the_interval_without_opening_a_version` |
+| A delete closes an interval at the deletion, not at the row's last change | `test_a_delete_closes_the_interval_at_the_deletion_not_the_last_change` |
 | Updates that change nothing tracked create no version | `test_updates_that_change_nothing_tracked_do_not_create_versions` |
+| A no-op update between versions leaves no gap in the timeline | `test_a_noop_update_between_versions_leaves_no_gap` |
+| `ended_by_delete` is never NULL, so the obvious filter is not silently empty | `test_ended_by_delete_is_never_null` |
+| Changes made after a snapshot are not reconciliation failures | `test_reconciliation_ignores_changes_made_after_the_snapshot` |
 | Reverse ETL's target table is not captured by CDC | `test_reverse_etl_target_is_not_captured` |
 | A WAL cap invalidates the slot instead of filling the disk | `test_the_cap_invalidates_the_slot_instead_of_filling_the_disk` |
 | Reconciliation catches changes CDC never received | `test_reconciliation_test_fails_when_cdc_missed_a_change` |
@@ -71,6 +74,30 @@ And M2's, in [tests/test_scd2.py](tests/test_scd2.py) and
 Debezium needs a JVM and is not run by the test suite. Everything it *depends on* is: the tests
 use a real logical-decoding Postgres, so publication membership, replica identity and slot
 invalidation under `max_slot_wal_keep_size` are verified rather than asserted in prose.
+
+### What CI does not cover
+
+CI runs the test suite and the linters against an embedded Postgres. It starts no containers,
+so everything below was verified by hand against the running stack and is evidenced in commit
+messages and `docs/incidents/`, not by a green tick. Listed because the distinction is the
+point: a passing pipeline is not the same claim as a working system, and several of the worst
+defects found in this project lived precisely in the gap.
+
+| Not covered by CI | How it was verified instead |
+|---|---|
+| The compose stack starting at all | Run on a 16 GB host; every service healthy |
+| Debezium registration and CDC topic creation | Connector `RUNNING`, topics carrying messages, slot active |
+| Airflow scheduling, DAG parsing, the Cosmos task graph | 10 DAGs parsed with no import errors, `transform` green 32/32 |
+| The four chaos scenarios, inject and recover | `docs/incidents/01`–`04`, with the observed numbers |
+| Deterministic replay across a whole topic | 384 tasks replayed: row count held, 0 duplicate offsets |
+| Golden snapshot and restore | Not yet run |
+| The live Hetzner instance | Not yet created; `terraform apply` is a billable human decision |
+
+Two of those gaps have since been narrowed, because the failure was reducible to a test:
+`tests/test_connector_topics.py` asserts the connector's table list against the topics
+`redpanda-init` creates (a mismatch let the connector report `RUNNING` while every produce
+failed), and `tests/test_fixture_teardown.py` asserts the suite stops the Postgres servers it
+starts. Where a container failure *can* be pulled back into the suite, it should be.
 
 Alongside those: the collector's contract (envelope-only validation, account-keyed
 partitioning, no ack without a broker ack) in

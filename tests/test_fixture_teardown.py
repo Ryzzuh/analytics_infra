@@ -11,8 +11,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from pathlib import Path
 
 from conftest import server_dir
+
+REPO = Path(__file__).resolve().parents[1]
 
 HANDLES = ".handle_pids.json"
 
@@ -72,3 +76,26 @@ def test_a_missing_handle_file_is_fine(tmp_path, monkeypatch):
 
     assert created.is_dir()
     assert not (created / HANDLES).exists()
+
+
+# --------------------------------------------------------------------------- README claims
+
+
+def test_every_test_the_readme_names_exists():
+    """The README's tables are its evidence: each claim points at the test that proves it.
+
+    A renamed test turns that into a citation of something that no longer exists, and nothing
+    else notices — the suite passes, the docs read fine, and the link is dead. That happened
+    once already: `test_a_delete_closes_the_interval_without_opening_a_version` was renamed
+    while fixing how deletes are dated, and the README kept naming the old one.
+    """
+    readme = (REPO / "README.md").read_text()
+    named = set(re.findall(r"`(test_[a-z0-9_]+)`", readme))
+    assert named, "the README should cite the tests behind its claims"
+
+    defined = set()
+    for path in (REPO / "tests").glob("test_*.py"):
+        defined.update(re.findall(r"^def (test_[a-z0-9_]+)", path.read_text(), re.M))
+
+    missing = sorted(named - defined)
+    assert not missing, f"the README names tests that no longer exist: {missing}"
