@@ -58,3 +58,28 @@ rows=8661 dlq=5 range=[144,8810)
 The tombstone is the one worth noting: normal and meaningful on a CDC topic, meaningless on an
 event topic, and counted rather than ignored — a connector emitting them in error would
 otherwise be invisible.
+
+## Second run: on the always-on host, with Airflow orchestrating (2026-09-17)
+
+The first run drove the loader by hand. This one ran on the 16 GB host with the scheduler
+actually running the DAGs, which is the arrangement the design assumes.
+
+Five poison messages injected; five rows in the DLQ within 90 seconds, each with a distinct
+reason:
+
+| Reason | Count |
+|---|---|
+| `tombstone_on_event_topic` | 1 |
+| `invalid_json: Expecting property name enclosed in double quotes` | 1 |
+| `envelope_not_object` | 1 |
+| `missing_envelope_fields: event_id,received_at` | 1 |
+| `missing_envelope_fields: event_time,received_at` | 1 |
+
+The ledger entry that covered them is the evidence worth keeping:
+
+    product.feature_usage  [1868, 1905)  row_count=32  dlq_count=5
+
+Thirty-seven messages in the range, thirty-two loaded, five quarantined in the DLQ, and the
+partition advanced past all of them. Nothing stalled and nothing was silently dropped: the
+range accounts for every message exactly once. `raw.product_events` went from 31,350 to 31,950
+across the same window, so the rest of the batch kept flowing.

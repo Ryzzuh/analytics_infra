@@ -58,3 +58,25 @@ stayed green throughout — the storm changed the numbers, not the shape.
 
 Recovery reported the 1,251 held events and the command to absorb them, rather than running it:
 absorbing changes periods that have already been reported, so it is a decision.
+
+## Second run: on the always-on host (2026-09-17)
+
+5,000 events, three days late, 30% of them duplicated.
+
+| Measure | Value |
+|---|---|
+| Raw rows after the storm | 39,013 |
+| Distinct `event_id` | 37,415 |
+| **Duplicate copies collapsed** | **1,598** |
+| Rows in staging | 36,416 |
+| **Held in quarantine** | **1,262** |
+| Worst load lag | **3.9 days** |
+
+Recovery reported the quarantined remainder rather than absorbing it, which is the intended
+behaviour: folding 1,262 three-day-old events into closed periods changes numbers people may
+already have seen, so it stays a decision (SPEC.md §6.2).
+
+Those figures do not reconcile to an exact identity — staging plus quarantine exceeds the
+distinct count by 263 — because the simulator keeps writing between each count and the models
+were built a minute before they were taken. Worth stating plainly: on a live stack the
+arithmetic only closes if every number is read from the same instant.

@@ -63,3 +63,28 @@ Blocking, and citing the model that declares the field required.
 **The lag is inherent**, not a defect: drift is detected against observed history, so a removal
 is only visible once a full window contains none of the old shape. Expect up to one window
 (an hour in production) between a release and the finding.
+
+## Second run: on the always-on host (2026-09-17)
+
+The release renaming `plan` to `plan_code` was injected at 00:47 UTC. Within one detector run
+the new field was recorded for all four event types:
+
+    page_view / feature_invoked / report_exported / api_called
+    plan_code   field_added   blocking=false
+
+The *blocking* finding — `field_removed` on `plan` — did not appear for the rest of the hour,
+and that is correct rather than a delay to engineer away. The detector compares a one-hour
+window against the recorded baseline, so until the whole window sits after the release it still
+contains pre-release events carrying `plan`. A field absent for ten minutes is not a removed
+field; treating it as one would fire on every optional field that happens to go quiet.
+
+Running the same detector over a ten-minute window — the first window entirely after the
+release — produced what the hourly run will produce once an hour has passed:
+
+    page_view / report_exported / feature_invoked / api_called
+    plan         field_removed   blocking=True
+
+So the lag is a property of the window size, not of the detector. The cost is that a blocking
+drift takes up to an hour to surface; the benefit is that it never fires on a quiet field. If
+that trade ever needs revisiting, the knob is `window` in `drift_detection.py`, and the
+consequence is more false positives, not faster true ones.

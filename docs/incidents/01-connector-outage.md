@@ -63,3 +63,22 @@ than merely running.
 Reaching the 5 GB cap is not practical in a demo — it would take gigabytes of WAL. That half is
 proven instead by `tests/test_replication_config.py`, which sets a 32 MB cap against a real
 Postgres and watches `wal_status` reach `lost` while the database keeps accepting writes.
+
+## Second run: on the always-on host (2026-09-17)
+
+| Moment | Slot state |
+|---|---|
+| Baseline | `active=true`, 9.6 kB retained |
+| Connect stopped | `active=false`, 3.5 kB retained |
+| After ~6 minutes of source writes | `active=false`, **55 kB retained and climbing** |
+| Connect restarted | `active=true`, backlog delivered |
+| Three minutes later | `active=true`, 40 kB and draining |
+
+The subscriptions topic went 8,901 → 8,915 on recovery, and 25 change rows loaded in the five
+minutes after. Recovery reported `resnapshot: false`, which is the correct decision: the slot
+was never invalidated, `ops.cdc_gaps` held nothing unresolved, and an incremental snapshot would
+have been work done for a gap that did not exist.
+
+A full `transform` run afterwards passed, including `assert_scd2_matches_oltp_snapshot` — so the
+CDC-derived history still agreed with an independent snapshot of the source after the outage.
+That is the part worth having: the platform did not merely restart, it came back consistent.
