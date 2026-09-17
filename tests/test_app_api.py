@@ -6,6 +6,8 @@ that no longer exist, upserting rather than duplicating — are database behavio
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -108,3 +110,33 @@ def test_the_product_page_shows_bands_written_back(client, app_conn):
     assert page.status_code == 200
     assert "critical" in page.text
     assert "Acme" in page.text
+
+
+def test_every_product_button_emits_an_event_type_the_collector_knows():
+    """The page's buttons and the collector's routing table have to agree.
+
+    A button emitting an unknown type gets a 422 naming a field the visitor cannot act on, and
+    the event is simply lost — there is no topic for it. The two lists live in different
+    services, so nothing but this test keeps them in step.
+    """
+    from app_api.app import PRODUCT_ACTIONS
+    from collector.app import EVENT_FAMILIES
+
+    for label, event_type, family in PRODUCT_ACTIONS:
+        assert event_type in EVENT_FAMILIES, f"{label!r} emits unknown event_type {event_type!r}"
+        assert EVENT_FAMILIES[event_type] == family, (
+            f"{label!r} claims family {family!r}, collector routes it to "
+            f"{EVENT_FAMILIES[event_type]!r}"
+        )
+
+
+def test_the_page_posts_to_a_same_origin_path():
+    """A relative URL is what keeps the collector free of CORS.
+
+    An absolute URL to the collector's own port would be cross-origin, and making it work would
+    mean putting CORS middleware on an unauthenticated write path into the warehouse.
+    """
+    source = Path(__file__).resolve().parents[1] / "services/app_api/src/app_api/app.py"
+    body = source.read_text()
+    assert "fetch('/v1/events'" in body, "the page must post to a relative, same-origin path"
+    assert "http://collector" not in body, "an absolute collector URL would need CORS"

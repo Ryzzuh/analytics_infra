@@ -50,8 +50,25 @@
 	}
 
 	# The product itself, so churn scores arriving via reverse ETL are visible end to end.
-	handle /app* {
+	#
+	# handle_path, not handle: `handle` passes the matched prefix through, so app-api received
+	# /app and answered 404 — the product page was only ever reachable on its direct port, never
+	# through the front door. handle_path strips the prefix so the service sees /.
+	handle_path /app* {
 		reverse_proxy app-api:8003
+	}
+
+	# Event ingestion for the product page, proxied so the browser talks to the same origin it
+	# was served from. The alternative — CORS on the collector — would mean opening an
+	# unauthenticated write path into the warehouse to whichever origins were allowed.
+	#
+	# Behind the passcode because it *writes*: the rule in §11 is that anything changing state
+	# is gated, and events change the warehouse as surely as a chaos injection does. The browser
+	# prompts once and caches for the session, so clicking around the product still feels like
+	# clicking around a product.
+	handle /v1/events {
+		import demo_passcode
+		reverse_proxy collector:8000
 	}
 
 	# --- public, read-only, third-party UIs --------------------------------------------

@@ -299,3 +299,28 @@ def test_secrets_reach_the_deploy_only_through_sops():
 
     assert "SOPS_AGE_KEY" in deploy
     assert "sops -d secrets/prod.yaml" in deploy
+
+
+def test_the_product_page_is_reachable_through_caddy(caddy_env):
+    """`handle` passes the matched prefix through; only `handle_path` strips it.
+
+    With `handle /app*`, app-api received /app, had no such route, and answered 404 — so the
+    product page worked on its direct port and nowhere else. Nothing noticed, because the direct
+    port is what you reach for while developing.
+    """
+    config = CADDYFILE.read_text()
+    assert "handle_path /app*" in config, "handle (not handle_path) leaves app-api seeing /app"
+
+
+def test_event_ingestion_is_same_origin_and_gated(caddy_env):
+    """The product page posts events to this route.
+
+    Proxied so the browser stays same-origin, which is what lets the collector go without CORS —
+    CORS there would mean an unauthenticated write path into the warehouse. Gated because
+    ingesting events changes state, and §11 puts everything that changes state behind the
+    passcode.
+    """
+    config = CADDYFILE.read_text()
+    events = config.split("handle /v1/events")[1].split("\t}")[0]
+    assert "reverse_proxy collector:8000" in events
+    assert "import demo_passcode" in events
