@@ -7,6 +7,8 @@ COPY) while needing no Docker, so they run on a laptop as well as in CI.
 
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -19,10 +21,54 @@ from loader.testing import FakeMessageSource
 TOPIC = "product.feature_usage"
 
 
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by somebody else
+    return True
+
+
+def server_dir(name: str) -> Path:
+    """A stable data directory for an embedded Postgres, with dead handles pruned.
+
+    Both halves of this exist because the suite was leaving postmasters behind — 32 of them on
+    one machine, which is every System V shared memory id macOS allows (`kern.sysv.shmmni`).
+    Once they are gone, initdb fails with "No space left on device" and every test that needs a
+    database errors out, with nothing to suggest the cause is previous *test runs*.
+
+    A fixed directory, not mkdtemp. Teardown is registered with atexit, which a SIGKILL never
+    runs — a CI timeout, a stopped test run, an interrupted session. With a fresh directory per
+    run, each one of those stranded a brand new server, so the count only ever grew. One
+    directory per role means at most one server per role no matter how many runs die, and it
+    skips initdb on every run after the first.
+
+    Pruning, because pgserver records the pids using a server as a plain JSON list in the data
+    directory and never checks whether they are still alive. A killed run leaves its pid there
+    forever, and `_cleanup` stops the server only when the list holds nothing but its own pid —
+    so from then on every *well-behaved* run decides someone else is still using the server and
+    declines to stop it. One killed run disables teardown permanently.
+    """
+    pgdata = Path(tempfile.gettempdir()) / f"analytics-infra-{name}"
+    pgdata.mkdir(parents=True, exist_ok=True)
+
+    handles = pgdata / ".handle_pids.json"
+    try:
+        pids = json.loads(handles.read_text())
+    except (OSError, json.JSONDecodeError):
+        return pgdata
+
+    alive = [pid for pid in pids if _pid_is_alive(pid)]
+    if alive != pids:
+        handles.write_text(json.dumps(alive))
+    return pgdata
+
+
 @pytest.fixture(scope="session")
 def pg_uri() -> str:
-    data_dir = Path(tempfile.mkdtemp(prefix="analytics-infra-pg-"))
-    server = pgserver.get_server(data_dir)
+    server = pgserver.get_server(server_dir("pg"))
     try:
         yield server.get_uri()
     finally:
@@ -74,8 +120,7 @@ def app_pg_uri() -> str:
     `wal_level=logical` and a deliberately tiny `max_slot_wal_keep_size` let the slot-retention
     behaviour behind SPEC.md §9.1 be tested for real rather than asserted in prose.
     """
-    data_dir = Path(tempfile.mkdtemp(prefix="analytics-infra-app-"))
-    server = pgserver.get_server(data_dir)
+    server = pgserver.get_server(server_dir("app"))
     with psycopg.connect(server.get_uri(), autocommit=True) as conn:
         conn.execute("ALTER SYSTEM SET wal_level = 'logical'")
         conn.execute("ALTER SYSTEM SET max_slot_wal_keep_size = '32MB'")
@@ -86,6 +131,16 @@ def app_pg_uri() -> str:
         yield server.get_uri()
     finally:
         server.cleanup()
+        # cleanup() is not enough here, and this fixture is the only one that needs the extra
+        # step. pgserver decides whether to stop the server by asking whether the postmaster it
+        # started is still running — but the restart above replaced that process without
+        # telling pgserver, so it checks a pid that died during the restart, concludes the
+        # server is already down, and leaves the *new* postmaster running. Every run leaked one
+        # server this way even when teardown completed normally.
+        try:
+            pgserver.pg_ctl(["stop", "-w", "-m", "fast"], pgdata=server.pgdata)
+        except Exception:  # noqa: BLE001 - already stopped, or never started
+            pass
 
 
 @pytest.fixture

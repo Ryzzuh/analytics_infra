@@ -20,6 +20,16 @@ test-all: ## Every test, including the dbt builds (slower: real dbt runs per tes
 test-slowest: ## Show which tests dominate the runtime
 	$(UV) run pytest --durations=15 -q
 
+test-db-stop: ## Stop the embedded Postgres servers the tests reuse between runs
+	@# The fixtures reuse one data directory per role and stop the servers on teardown, so this
+	@# is only needed after a run is killed outright (teardown goes through atexit, which
+	@# SIGKILL skips). Each abandoned server holds a System V shared memory id; macOS allows 32
+	@# in total, and past that initdb fails with "No space left on device".
+	@pkill -TERM -f "pgserver/pginstall/bin/postgres -D" 2>/dev/null || true
+	@sleep 2
+	@echo "embedded postgres servers running: $$(pgrep -f 'pgserver/pginstall/bin/postgres -D' | wc -l | tr -d ' ')"
+	@echo "shared memory segments:            $$(ipcs -m 2>/dev/null | grep -c '^m' || echo 0)"
+
 test-alerts: ## Alert rule unit tests (promtool) + Alertmanager config check
 	cd infra/monitoring && promtool test rules rules_test.yml
 	amtool check-config infra/monitoring/alertmanager.yml
@@ -128,6 +138,6 @@ load-once: ## Run one micro-batch load outside Airflow, against the running stac
 dbt: ## Build the dbt models against the running warehouse
 	cd dbt && $(UV) run --with dbt-postgres dbt build --profiles-dir .
 
-.PHONY: help install test test-all test-slowest test-alerts console-install console-build console-dev infra-check plan apply destroy cost \
+.PHONY: help install test test-all test-slowest test-db-stop test-alerts console-install console-build console-dev infra-check plan apply destroy cost \
 	secrets-edit secrets-encrypt secrets-check lint fmt up up-full down nuke logs ps ddl load-once dbt \
 	history history-estimate golden restore
