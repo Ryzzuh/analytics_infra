@@ -538,8 +538,14 @@ services:
     # socket. That is a real privilege: it is why the Airflow token lives here and not in the
     # product app, and why Caddy gates every action route behind the passcode (SPEC.md §11).
     volumes:
+      # golden.sh is deliberately NOT mounted here. The reset endpoint returns 501 and points
+      # at the host, because a restore needs the compose file and the host's docker, neither of
+      # which this container has. The mount was vestigial and actively harmful: binding a
+      # single *file* pins its inode, so editing golden.sh — or any git checkout that replaces
+      # it — breaks this container's mount, and `compose start` then fails with a runc mount
+      # error. Discovered while running the golden snapshot, which replaced the script twice
+      # and took the control plane down both times.
       - /var/run/docker.sock:/var/run/docker.sock
-      - ../../infra/golden/golden.sh:/app/golden.sh:ro
     command: ["uvicorn", "control_plane.app:app", "--host", "0.0.0.0", "--port", "8006"]
     ports: ["8006:8006"]
 
