@@ -90,7 +90,7 @@ defects found in this project lived precisely in the gap.
 | Airflow scheduling, DAG parsing, the Cosmos task graph | 10 DAGs parsed with no import errors, `transform` green 32/32 |
 | The four chaos scenarios, inject and recover | `docs/incidents/01`–`04`, with the observed numbers |
 | Deterministic replay across a whole topic | 384 tasks replayed: row count held, 0 duplicate offsets |
-| Golden snapshot and restore | Not yet run |
+| Golden snapshot and restore | Run end to end: `docs/runbooks/golden-restore.md` |
 | The live Hetzner instance | Not yet created; `terraform apply` is a billable human decision |
 
 Two of those gaps have since been narrowed, because the failure was reducible to a test:
