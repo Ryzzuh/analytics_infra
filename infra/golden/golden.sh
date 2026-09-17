@@ -90,6 +90,21 @@ cmd_restore() {
   $COMPOSE up -d postgres-app postgres-warehouse redpanda
   $COMPOSE up -d connect
 
+  # `up -d` returns when the container has started, not when Kafka Connect's REST API is
+  # accepting requests — and a JVM takes the best part of a minute to get there. Registering
+  # immediately fails with `curl: (56) Recv failure: Connection reset by peer`, halfway through
+  # a restore, with the volumes already replaced and the stack half up. The compose file
+  # defines a healthcheck for exactly this; nothing was waiting on it.
+  log "waiting for Kafka Connect's REST API"
+  for _ in $(seq 1 60); do
+    if curl --fail -sS -o /dev/null --max-time 3 http://localhost:8083/connectors 2>/dev/null; then
+      break
+    fi
+    sleep 5
+  done
+  curl --fail -sS -o /dev/null --max-time 5 http://localhost:8083/connectors \
+    || { log "Kafka Connect did not become ready; not registering the connector"; exit 1; }
+
   # snapshot.mode=never: the restored volumes already contain the snapshot, and re-running it
   # would duplicate the entire source database on top of itself.
   log "registering connector at the restored slot position"
