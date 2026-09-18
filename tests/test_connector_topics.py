@@ -194,3 +194,22 @@ def test_the_makefile_passes_the_root_env_file_to_compose():
     assert "--project-directory" not in compose_line, (
         "--project-directory re-bases the ../../ build contexts two levels too high"
     )
+
+
+def test_no_repo_file_is_bind_mounted_on_its_own():
+    """Mount directories, never single files.
+
+    Binding a file pins its inode. Git replaces files rather than editing them in place, so any
+    pull that touched a mounted file left the running container bound to something that no
+    longer existed, and the next `compose start` failed with a runc mount error. It took down
+    the control plane, then Prometheus mid-deploy — which aborted `make up-full` with nineteen
+    containers stopped or never started. A directory's inode survives its contents changing.
+    """
+    root = REPO / "infra" / "compose"
+    offenders = []
+    for name, service in compose_config()["services"].items():
+        for volume in service.get("volumes") or []:
+            source = volume.split(":")[0]
+            if source.startswith(".") and (root / source).resolve().is_file():
+                offenders.append(f"{name}: {source}")
+    assert not offenders, f"single-file bind mounts break on the next git pull: {offenders}"

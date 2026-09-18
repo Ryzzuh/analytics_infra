@@ -363,13 +363,13 @@ services:
     image: curlimages/curl:8.11.1
     depends_on:
       connect: {condition: service_healthy}
-    volumes: ["../connect/subscriptions-source.json:/connector.json:ro"]
+    volumes: ["../connect:/connect:ro"]
     # --fail matters: without it curl exits 0 on a 4xx/5xx and a rejected connector config
     # looks exactly like a successful registration.
     command: >
       --fail --silent --show-error -X PUT
       -H "Content-Type: application/json"
-      --data @/connector.json
+      --data @/connect/subscriptions-source.json
       http://connect:8083/connectors/app-cdc/config
     restart: on-failure
 
@@ -498,12 +498,13 @@ services:
     image: prom/prometheus:v3.6.0
     profiles: [full]
     command:
-      - --config.file=/etc/prometheus/prometheus.yml
+      - --config.file=/etc/prometheus/config/prometheus.yml
       - --storage.tsdb.retention.time=15d
       # 15 days at 30s: enough to see last week's incident, small enough for the box.
       - --web.enable-lifecycle
     volumes:
-      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # The directory, not the file — see the note on caddy below.
+      - ../monitoring:/etc/prometheus/config:ro
       - ../monitoring/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     ports: ["9090:9090"]
@@ -511,8 +512,11 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.28.1
     profiles: [full]
+    command:
+      - --config.file=/etc/alertmanager/config/alertmanager.yml
+      - --storage.path=/alertmanager
     volumes:
-      - ../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ../monitoring:/etc/alertmanager/config:ro
     ports: ["9093:9093"]
 
   grafana:
@@ -597,7 +601,13 @@ services:
       # sops (SPEC.md §13); the plaintext passcode is never in the repo.
       DEMO_PASSCODE_HASH: "${DEMO_PASSCODE_HASH:-$$2a$$14$$pKTcuJ.wurPLeZ3eoCdEy.bMTc4YsS7CDSJMweHTd.Xd9klXsW3n6}"
     volumes:
-      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Directory mounts, never single files. Binding a file pins its inode, and git replaces
+      # a file rather than editing it in place — so every pull that touched a config file
+      # left the running container bound to a file that no longer existed, and the next
+      # `compose start` died with a runc mount error. It took down the control plane, then
+      # Prometheus mid-deploy, which aborted `make up-full` with 19 containers stopped or
+      # never started. A directory's inode survives the files inside it being replaced.
+      - ../caddy:/etc/caddy:ro
       - ../../console/build:/srv/console:ro
       - caddy-data:/data
       - caddy-config:/config
