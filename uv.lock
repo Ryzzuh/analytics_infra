@@ -8,6 +8,7 @@ members = [
     "analytics-app-api",
     "analytics-billing-mock",
     "analytics-collector",
+    "analytics-container-exporter",
     "analytics-control-plane",
     "analytics-dq",
     "analytics-drift",
@@ -116,6 +117,25 @@ requires-dist = [
 ]
 
 [[package]]
+name = "analytics-container-exporter"
+version = "0.1.0"
+source = { editable = "services/container_exporter" }
+dependencies = [
+    { name = "docker" },
+    { name = "fastapi" },
+    { name = "prometheus-client" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "docker", specifier = ">=7.1" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "prometheus-client", specifier = ">=0.21" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
+
+[[package]]
 name = "analytics-control-plane"
 version = "0.1.0"
 source = { editable = "services/control_plane" }
@@ -169,6 +189,7 @@ dependencies = [
     { name = "analytics-app-api" },
     { name = "analytics-billing-mock" },
     { name = "analytics-collector" },
+    { name = "analytics-container-exporter" },
     { name = "analytics-control-plane" },
     { name = "analytics-dq" },
     { name = "analytics-drift" },
@@ -194,6 +215,7 @@ requires-dist = [
     { name = "analytics-app-api", editable = "services/app_api" },
     { name = "analytics-billing-mock", editable = "services/billing_mock" },
     { name = "analytics-collector", editable = "services/collector" },
+    { name = "analytics-container-exporter", editable = "services/container_exporter" },
     { name = "analytics-control-plane", editable = "services/control_plane" },
     { name = "analytics-dq", editable = "platform/dq" },
     { name = "analytics-drift", editable = "platform/drift" },

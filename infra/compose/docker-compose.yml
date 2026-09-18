@@ -85,6 +85,7 @@ services:
     volumes: ["redpanda-data:/var/lib/redpanda/data"]
 
   redpanda-init:
+    labels: {analytics.one-shot: "true"}
     image: redpandadata/redpanda:v24.2.7
     depends_on:
       redpanda: {condition: service_healthy}
@@ -139,6 +140,7 @@ services:
       - ../../db/warehouse/ddl:/ddl:ro
 
   warehouse-init:
+    labels: {analytics.one-shot: "true"}
     image: postgres:16-alpine
     depends_on:
       postgres-warehouse: {condition: service_healthy}
@@ -186,6 +188,7 @@ services:
       - ../../db/app/ddl:/ddl:ro
 
   app-init:
+    labels: {analytics.one-shot: "true"}
     image: postgres:16-alpine
     depends_on:
       postgres-app: {condition: service_healthy}
@@ -249,6 +252,7 @@ services:
   # Schema migration runs once, in its own container, so four components do not race to migrate
   # the same database on a cold start.
   airflow-init:
+    labels: {analytics.one-shot: "true"}
     <<: *airflow-common
     depends_on:
       postgres-airflow: {condition: service_healthy}
@@ -355,6 +359,7 @@ services:
   # failing with 409. It takes the bare config object, which is why the JSON file holds exactly
   # that — the {name, config} wrapper the old README posted here is rejected outright.
   connect-init:
+    labels: {analytics.one-shot: "true"}
     image: curlimages/curl:8.11.1
     depends_on:
       connect: {condition: service_healthy}
@@ -446,6 +451,34 @@ services:
       WAREHOUSE_DSN: postgresql://warehouse:warehouse@postgres-warehouse:5432/warehouse
     command: ["uvicorn", "metrics_exporter.app:app", "--host", "0.0.0.0", "--port", "8005"]
     ports: ["8005:8005"]
+
+  # Container state, Docker healthcheck status, restarts and OOM kills (services/container_exporter).
+  #
+  # The Docker socket is root-equivalent on the host, and `:ro` does not change that — it makes
+  # the socket *file* read-only, not the API behind it. The exporter only ever calls read
+  # endpoints, but the privilege is real, which is why this is its own small service rather than
+  # a feature of the metrics exporter that already holds warehouse credentials. A socket proxy
+  # that permits only GET /containers would narrow it properly.
+  #
+  # Not published to the host: `docker inspect` returns every container's environment, secrets
+  # included. The exporter never emits it, and nothing outside the compose network needs to ask.
+  container-exporter:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile.service
+      args: {SERVICE: container_exporter}
+    profiles: [full]
+    environment:
+      COMPOSE_PROJECT: analytics-infra
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: ["uvicorn", "container_exporter.app:app", "--host", "0.0.0.0", "--port", "8007"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8007/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   alert-bridge:
     build:

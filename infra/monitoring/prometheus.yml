@@ -55,6 +55,11 @@ scrape_configs:
           - app-api:8003
           - alert-bridge:8004
 
+  # Container state and Docker healthcheck status, from the Docker API (services/container_exporter).
+  - job_name: containers
+    static_configs:
+      - targets: [container-exporter:8007]
+
   # Airflow publishes over StatsD; the exporter turns that into a scrape target.
   - job_name: airflow
     static_configs:

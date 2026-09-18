@@ -1,0 +1,19 @@
+[project]
+# Namespaced distribution name, like every other package here: short names are squatted on PyPI.
+name = "analytics-container-exporter"
+version = "0.1.0"
+description = "Container state, Docker healthcheck status, restarts and OOM kills, for Prometheus"
+requires-python = ">=3.12"
+dependencies = [
+    "docker>=7.1",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "prometheus-client>=0.21",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/container_exporter"]

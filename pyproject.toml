@@ -16,6 +16,7 @@ dependencies = [
     "analytics-metrics-exporter",
     "analytics-alert-bridge",
     "analytics-control-plane",
+    "analytics-container-exporter",
 ]
 
 [dependency-groups]
@@ -41,6 +42,7 @@ members = [
     "services/metrics_exporter",
     "services/alert_bridge",
     "services/control_plane",
+    "services/container_exporter",
 ]
 
 [tool.uv.sources]
@@ -56,6 +58,7 @@ analytics-app-api = { workspace = true }
 analytics-metrics-exporter = { workspace = true }
 analytics-alert-bridge = { workspace = true }
 analytics-control-plane = { workspace = true }
+analytics-container-exporter = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
