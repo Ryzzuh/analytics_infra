@@ -34,7 +34,8 @@ WAREHOUSE_DSN = os.environ.get(
     "WAREHOUSE_DSN", "postgresql://warehouse:warehouse@postgres-warehouse:5432/warehouse"
 )
 AIRFLOW_URL = os.environ.get("AIRFLOW_URL", "http://airflow:8080")
-AIRFLOW_TOKEN = os.environ.get("AIRFLOW_API_TOKEN", "")
+AIRFLOW_USERNAME = os.environ.get("AIRFLOW_USERNAME", "admin")
+AIRFLOW_PASSWORD = os.environ.get("AIRFLOW_PASSWORD", "")
 PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090")
 COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT", "analytics-infra")
 
@@ -242,13 +243,60 @@ def scenarios() -> dict[str, Any]:
 # ----------------------------------------------------------------------- actions (passcode)
 
 
-def _airflow(method: str, path: str, **kwargs) -> httpx.Response:
-    if not AIRFLOW_TOKEN:
-        raise HTTPException(status_code=503, detail="control plane has no Airflow token")
-    with httpx.Client(base_url=AIRFLOW_URL, timeout=20.0) as client:
-        return client.request(
-            method, path, headers={"Authorization": f"Bearer {AIRFLOW_TOKEN}"}, **kwargs
+# The token this process is currently using, or None before the first call. Held in memory on
+# purpose: a restart should re-authenticate rather than reuse something it cannot verify.
+_token: str | None = None
+
+
+def _mint_token(client: httpx.Client) -> str:
+    """Exchange credentials for a JWT at Airflow's own /auth/token.
+
+    Credentials, not a token, because Airflow 3 issues JWTs with a 24h lifetime. A token pasted
+    into the environment is therefore dead within a day, and its death is invisible until
+    somebody presses the button and gets a 502 carrying Airflow's "Token Expired" — which is
+    exactly how this failed twice.
+    """
+    if not AIRFLOW_PASSWORD:
+        raise HTTPException(status_code=503, detail="control plane has no Airflow credentials")
+    response = client.post(
+        "/auth/token",
+        json={"username": AIRFLOW_USERNAME, "password": AIRFLOW_PASSWORD},
+        headers={"Content-Type": "application/json"},
+    )
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=503,
+            detail=f"could not authenticate to Airflow: {response.status_code} "
+            f"{response.text[:200]}",
         )
+    token = response.json().get("access_token")
+    if not token:
+        raise HTTPException(status_code=503, detail="Airflow returned no access_token")
+    log.info("minted a new Airflow token for %s", AIRFLOW_USERNAME)
+    return token
+
+
+def _airflow(method: str, path: str, **kwargs) -> httpx.Response:
+    """Call the Airflow API, authenticating and re-authenticating as needed.
+
+    Re-mints on 401 rather than tracking expiry: the token's lifetime is Airflow's business and
+    could change under us, whereas a 401 is unambiguous. One retry only — a second 401 means the
+    credentials are wrong, and retrying a wrong password in a loop is how accounts get locked.
+    """
+    global _token
+    with httpx.Client(base_url=AIRFLOW_URL, timeout=20.0) as client:
+        if _token is None:
+            _token = _mint_token(client)
+        response = client.request(
+            method, path, headers={"Authorization": f"Bearer {_token}"}, **kwargs
+        )
+        if response.status_code == 401:
+            log.info("Airflow rejected the token; re-authenticating")
+            _token = _mint_token(client)
+            response = client.request(
+                method, path, headers={"Authorization": f"Bearer {_token}"}, **kwargs
+            )
+        return response
 
 
 @app.post("/api/actions/run-pipeline")

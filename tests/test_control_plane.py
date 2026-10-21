@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 from opsctl.chaos import SCENARIOS, close_window, expire_stale_windows, open_window, open_windows
+
+REPO = Path(__file__).resolve().parents[1]
 
 NOW = datetime(2026, 9, 16, 7, 0, tzinfo=UTC)
 
@@ -56,7 +59,8 @@ def console(conn, pg_uri, monkeypatch):
     from control_plane import app as module
 
     monkeypatch.setattr(module, "WAREHOUSE_DSN", pg_uri)
-    monkeypatch.setattr(module, "AIRFLOW_TOKEN", "test-token")
+    monkeypatch.setattr(module, "AIRFLOW_PASSWORD", "test-password")
+    monkeypatch.setattr(module, "_token", None)
     monkeypatch.setattr(module, "_last_chaos_at", None)
     module.executor = FakeExecutor()
     return module
@@ -170,6 +174,8 @@ def test_running_the_pipeline_twice_is_rejected_not_queued(client, console, monk
     same rule server-side, so this is the polite version of something true either way."""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/token":
+            return httpx.Response(201, json={"access_token": "test-token"})
         return httpx.Response(
             200,
             json={
@@ -354,3 +360,85 @@ def test_injection_works_on_a_dict_row_connection(pg_uri, conn, key):
         result = SCENARIOS[key].inject(dict_conn, FakeExecutor())
 
     assert isinstance(result, dict)
+
+
+# ------------------------------------------------------------------ authenticating to Airflow
+
+
+def test_the_control_plane_mints_its_own_token(client, console, monkeypatch):
+    """Credentials in, token out. Nothing static is configured anywhere."""
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path == "/auth/token":
+            return httpx.Response(201, json={"access_token": "fresh-token"})
+        assert request.headers["Authorization"] == "Bearer fresh-token"
+        return httpx.Response(200, json={"total_entries": 0, "dag_runs": []})
+
+    monkeypatch.setattr(console.httpx, "Client", mock_client(handler))
+    client.post("/api/actions/run-pipeline")
+
+    assert ("POST", "/auth/token") in seen, "it must authenticate before calling the API"
+
+
+def test_an_expired_token_is_replaced_rather_than_surfacing_as_a_502(client, console, monkeypatch):
+    """The failure this exists to end.
+
+    Airflow's JWTs last 24 hours. A token pasted into the environment was dead within a day, and
+    its death showed up as a 502 wrapping Airflow's own "Token Expired" — on the Console button,
+    in front of whoever was being shown the demo.
+    """
+    console._token = "stale-token"  # noqa: SLF001 - simulating a token that has since expired
+    minted = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/token":
+            minted.append(1)
+            return httpx.Response(201, json={"access_token": "replacement-token"})
+        if request.headers["Authorization"] == "Bearer stale-token":
+            return httpx.Response(401, json={"detail": "Token Expired"})
+        return httpx.Response(200, json={"total_entries": 0, "dag_runs": []})
+
+    monkeypatch.setattr(console.httpx, "Client", mock_client(handler))
+    response = client.post("/api/actions/run-pipeline")
+
+    assert len(minted) == 1, "a 401 should trigger exactly one re-authentication"
+    assert response.status_code != 502, "the caller should never see the expiry"
+
+
+def test_a_wrong_password_is_not_retried_in_a_loop(client, console, monkeypatch):
+    """One retry, not a loop. Hammering a bad password is how accounts get locked."""
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/token":
+            attempts.append(1)
+            return httpx.Response(401, json={"detail": "Invalid credentials"})
+        return httpx.Response(401)
+
+    monkeypatch.setattr(console.httpx, "Client", mock_client(handler))
+    response = client.post("/api/actions/run-pipeline")
+
+    assert response.status_code == 503, "bad credentials are the operator's problem, not a 502"
+    assert len(attempts) == 1
+
+
+def test_missing_credentials_say_so_plainly(client, console, monkeypatch):
+    monkeypatch.setattr(console, "AIRFLOW_PASSWORD", "")
+    monkeypatch.setattr(console, "_token", None)
+
+    response = client.post("/api/actions/run-pipeline")
+
+    assert response.status_code == 503
+    assert "credentials" in str(response.json()["detail"])
+
+
+def test_nothing_configures_a_static_airflow_token_any_more():
+    """A leftover AIRFLOW_API_TOKEN would look authoritative and be ignored."""
+    import yaml
+
+    compose = yaml.safe_load((REPO / "infra/compose/docker-compose.yml").read_text())
+    env = compose["services"]["control-plane"]["environment"]
+    assert "AIRFLOW_API_TOKEN" not in env
+    assert env.get("AIRFLOW_USERNAME") and env.get("AIRFLOW_PASSWORD")

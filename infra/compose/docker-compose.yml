@@ -19,6 +19,10 @@ x-airflow-env: &airflow-env
   # Where the scheduler's workers reach the Task Execution API. The default points at
   # localhost, which is correct only when everything shares one container.
   AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow:8080/execution/
+  # On a shared volume, not generated into the api-server's own filesystem. Left to itself
+  # Airflow invents a password per container, so every recreate silently invalidated the
+  # credential the control plane was using.
+  AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/auth/passwords.json
   AIRFLOW__CORE__LOAD_EXAMPLES: "false"
   AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
   AIRFLOW__CORE__PARALLELISM: "4"
@@ -256,11 +260,30 @@ services:
     <<: *airflow-common
     depends_on:
       postgres-airflow: {condition: service_healthy}
-    command: ["db", "migrate"]
+    volumes:
+      - ../../airflow/dags:/opt/airflow/dags:ro
+      - airflow-logs:/opt/airflow/logs
+      - airflow-auth:/opt/airflow/auth
+    environment:
+      <<: *airflow-env
+      AIRFLOW_ADMIN_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD:-demo-admin-not-for-anything-public}"
+    # Seeds the password file SimpleAuthManager reads. Left alone, Airflow invents a password per
+    # container and writes it to <file>.generated — so every recreate silently invalidated
+    # whatever credential the control plane held. Written before db migrate, so it exists before
+    # the api-server first reads it, and only when absent, so a rotated password survives.
+    entrypoint: ["/bin/bash", "-c"]
+    command: >
+      'test -f /opt/airflow/auth/passwords.json ||
+         printf "{\"admin\": \"%s\"}" "$$AIRFLOW_ADMIN_PASSWORD" > /opt/airflow/auth/passwords.json;
+       exec airflow db migrate'
     restart: "no"
 
   airflow-apiserver:
     <<: *airflow-common
+    volumes:
+      - ../../airflow/dags:/opt/airflow/dags:ro
+      - airflow-logs:/opt/airflow/logs
+      - airflow-auth:/opt/airflow/auth:ro
     depends_on:
       airflow-init: {condition: service_completed_successfully}
     # Reachable as `airflow` so the Caddyfile, the control plane and AIRFLOW_URL keep working:
@@ -576,7 +599,11 @@ services:
     environment:
       WAREHOUSE_DSN: postgresql://warehouse:warehouse@postgres-warehouse:5432/warehouse
       AIRFLOW_URL: http://airflow:8080
-      AIRFLOW_API_TOKEN: "${AIRFLOW_API_TOKEN:-}"
+      # Credentials, not a token. Airflow 3 issues JWTs that expire after 24 hours, so a token
+      # pasted into .env was dead within a day — surfacing as a 502 wrapping "Token Expired" on
+      # the Console's own button. The control plane mints its own and re-mints on 401.
+      AIRFLOW_USERNAME: "${AIRFLOW_USERNAME:-admin}"
+      AIRFLOW_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD:-demo-admin-not-for-anything-public}"
       PROMETHEUS_URL: http://prometheus:9090
     # The control plane runs chaos scenarios by acting on the stack, so it needs the docker
     # socket. That is a real privilege: it is why the Airflow token lives here and not in the
@@ -630,6 +657,7 @@ services:
     ports: ["8090:8080"]
 
 volumes:
+  airflow-auth:
   caddy-data:
   caddy-config:
   prometheus-data:
