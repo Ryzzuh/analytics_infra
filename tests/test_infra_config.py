@@ -324,3 +324,24 @@ def test_event_ingestion_is_same_origin_and_gated(caddy_env):
     events = config.split("handle /v1/events")[1].split("\t}")[0]
     assert "reverse_proxy collector:8000" in events
     assert "import demo_passcode" in events
+
+
+def test_grafana_is_reachable_through_caddy(caddy_env):
+    """Caddy routes by path prefix; Grafana has to be told it lives under one.
+
+    Without serve_from_sub_path it answers 404 for everything Caddy forwards — reachable on its
+    own port on the LAN and nowhere else, which is invisible until someone tries to reach the
+    dashboards from outside. root_url matters too: Grafana builds redirects and asset URLs from
+    it, so getting the prefix right in Caddy alone is not enough.
+    """
+    import yaml
+
+    compose = yaml.safe_load((REPO / "infra/compose/docker-compose.yml").read_text())
+    env = compose["services"]["grafana"]["environment"]
+    assert env.get("GF_SERVER_SERVE_FROM_SUB_PATH") == "true"
+    assert env.get("GF_SERVER_ROOT_URL", "").endswith("/grafana/")
+
+    config = CADDYFILE.read_text()
+    grafana = config.split("handle /grafana*")[1].split("\t}")[0]
+    assert "reverse_proxy grafana:3000" in grafana
+    assert "import demo_passcode" not in grafana, "dashboards are public on purpose (SPEC.md §11)"

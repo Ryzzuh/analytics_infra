@@ -530,6 +530,13 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_AUTH_BASIC_ENABLED: "false"
       GF_USERS_DEFAULT_THEME: light
+      # Served under /grafana, because Caddy is the only way in from outside and it routes by
+      # path prefix. Grafana does not infer a sub-path: without these it answers 404 for every
+      # request Caddy forwards, which is what it did — reachable on its own port on the LAN and
+      # nowhere else. The prefix has to be stripped by *nobody*: Grafana must know its own
+      # public URL, because it builds redirects and asset links from it.
+      GF_SERVER_ROOT_URL: "https://${DOMAIN:-localhost}/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     volumes:
       - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
