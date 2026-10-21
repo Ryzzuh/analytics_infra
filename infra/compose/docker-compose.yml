@@ -255,27 +255,43 @@ services:
 
   # Schema migration runs once, in its own container, so four components do not race to migrate
   # the same database on a cold start.
+  # Seeds the password file SimpleAuthManager reads, before any Airflow process looks for it.
+  #
+  # Its own container, running as root, because a named volume is created root-owned and the
+  # airflow image runs as uid 50000 — seeding from airflow-init failed with "Permission denied"
+  # while the `;` after it let `db migrate` run and exit 0, so the stack came up with the file
+  # missing and the api-server crash-looping on a read-only mount it was trying to generate into.
+  #
+  # Written only when absent, so rotating the password means changing it here and removing the
+  # volume, not having it silently reset on the next boot.
+  airflow-auth-init:
+    labels: {analytics.one-shot: "true"}
+    image: alpine:3.20
+    volumes:
+      - airflow-auth:/auth
+    environment:
+      AIRFLOW_ADMIN_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD:-demo-admin-not-for-anything-public}"
+      AIRFLOW_USERNAME: "${AIRFLOW_USERNAME:-admin}"
+    entrypoint: ["/bin/sh", "-c"]
+    # 0644 and owned by root: every Airflow process only ever reads it, and the api-server
+    # mounts the volume read-only so it can never regenerate over the top.
+    command: >
+      'if [ ! -f /auth/passwords.json ]; then
+         printf "{\"%s\": \"%s\"}" "$$AIRFLOW_USERNAME" "$$AIRFLOW_ADMIN_PASSWORD" > /auth/passwords.json;
+         chmod 0644 /auth/passwords.json;
+         echo "seeded /auth/passwords.json";
+       else
+         echo "/auth/passwords.json already present; left alone";
+       fi'
+    restart: "no"
+
   airflow-init:
     labels: {analytics.one-shot: "true"}
     <<: *airflow-common
     depends_on:
       postgres-airflow: {condition: service_healthy}
-    volumes:
-      - ../../airflow/dags:/opt/airflow/dags:ro
-      - airflow-logs:/opt/airflow/logs
-      - airflow-auth:/opt/airflow/auth
-    environment:
-      <<: *airflow-env
-      AIRFLOW_ADMIN_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD:-demo-admin-not-for-anything-public}"
-    # Seeds the password file SimpleAuthManager reads. Left alone, Airflow invents a password per
-    # container and writes it to <file>.generated — so every recreate silently invalidated
-    # whatever credential the control plane held. Written before db migrate, so it exists before
-    # the api-server first reads it, and only when absent, so a rotated password survives.
-    entrypoint: ["/bin/bash", "-c"]
-    command: >
-      'test -f /opt/airflow/auth/passwords.json ||
-         printf "{\"admin\": \"%s\"}" "$$AIRFLOW_ADMIN_PASSWORD" > /opt/airflow/auth/passwords.json;
-       exec airflow db migrate'
+      airflow-auth-init: {condition: service_completed_successfully}
+    command: ["db", "migrate"]
     restart: "no"
 
   airflow-apiserver:

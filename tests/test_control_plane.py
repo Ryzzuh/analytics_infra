@@ -442,3 +442,28 @@ def test_nothing_configures_a_static_airflow_token_any_more():
     env = compose["services"]["control-plane"]["environment"]
     assert "AIRFLOW_API_TOKEN" not in env
     assert env.get("AIRFLOW_USERNAME") and env.get("AIRFLOW_PASSWORD")
+
+
+def test_the_airflow_password_is_seeded_before_anything_reads_it():
+    """Ordering and ownership, both of which bit.
+
+    The seed must run before db migrate and before the api-server starts, or SimpleAuthManager
+    finds no file and invents a password — which is the behaviour being replaced. It needs its
+    own root container because a named volume is created root-owned and the airflow image runs
+    as uid 50000: seeding from airflow-init failed with "Permission denied", and because the
+    shell used `;` rather than `&&`, db migrate ran anyway and the init exited 0.
+
+    And the api-server must mount that volume read-only, or it regenerates over the seeded file
+    on a recreate and the control plane's credentials stop matching again.
+    """
+    import yaml
+
+    compose = yaml.safe_load((REPO / "infra/compose/docker-compose.yml").read_text())
+    services = compose["services"]
+
+    assert "airflow-auth-init" in services, "nothing seeds the password file"
+    assert "airflow-auth-init" in services["airflow-init"]["depends_on"]
+
+    apiserver_mounts = services["airflow-apiserver"]["volumes"]
+    auth = next(m for m in apiserver_mounts if m.startswith("airflow-auth:"))
+    assert auth.endswith(":ro"), "the api-server must not be able to regenerate the password"
