@@ -453,8 +453,11 @@ def test_the_airflow_password_is_seeded_before_anything_reads_it():
     as uid 50000: seeding from airflow-init failed with "Permission denied", and because the
     shell used `;` rather than `&&`, db migrate ran anyway and the init exited 0.
 
-    And the api-server must mount that volume read-only, or it regenerates over the seeded file
-    on a recreate and the control plane's credentials stop matching again.
+    The volume is deliberately NOT read-only, which took a crash loop to learn:
+    SimpleAuthManager opens the password file "a+" at startup whether or not it exists, so a
+    read-only mount fails with "Read-only file system" and a root-owned file with "Permission
+    denied". What preserves the seeded password is not the mount but Airflow's own rule — it
+    generates a password only for a user the file does not already contain.
     """
     import yaml
 
@@ -466,4 +469,7 @@ def test_the_airflow_password_is_seeded_before_anything_reads_it():
 
     apiserver_mounts = services["airflow-apiserver"]["volumes"]
     auth = next(m for m in apiserver_mounts if m.startswith("airflow-auth:"))
-    assert auth.endswith(":ro"), "the api-server must not be able to regenerate the password"
+    assert not auth.endswith(":ro"), "Airflow opens this file a+ at startup; :ro crash-loops it"
+
+    seed = services["airflow-auth-init"]["command"]
+    assert "chown -R 50000:0" in seed, "the airflow user must be able to open the file"

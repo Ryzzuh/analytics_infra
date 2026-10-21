@@ -273,16 +273,19 @@ services:
       AIRFLOW_ADMIN_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD:-demo-admin-not-for-anything-public}"
       AIRFLOW_USERNAME: "${AIRFLOW_USERNAME:-admin}"
     entrypoint: ["/bin/sh", "-c"]
-    # 0644 and owned by root: every Airflow process only ever reads it, and the api-server
-    # mounts the volume read-only so it can never regenerate over the top.
+    # Owned by uid 50000, the airflow user, because SimpleAuthManager opens this file "a+" at
+    # startup whether or not it already exists — it does not merely read it. A read-only mount
+    # fails with "Read-only file system" and a root-owned file with "Permission denied", and
+    # either way the api-server crash-loops. What preserves the seeded password is not the
+    # permissions but Airflow's own rule: it generates one only for a user the file lacks.
     command: >
       'if [ ! -f /auth/passwords.json ]; then
          printf "{\"%s\": \"%s\"}" "$$AIRFLOW_USERNAME" "$$AIRFLOW_ADMIN_PASSWORD" > /auth/passwords.json;
-         chmod 0644 /auth/passwords.json;
          echo "seeded /auth/passwords.json";
        else
          echo "/auth/passwords.json already present; left alone";
-       fi'
+       fi;
+       chown -R 50000:0 /auth && chmod 0644 /auth/passwords.json'
     restart: "no"
 
   airflow-init:
@@ -299,7 +302,7 @@ services:
     volumes:
       - ../../airflow/dags:/opt/airflow/dags:ro
       - airflow-logs:/opt/airflow/logs
-      - airflow-auth:/opt/airflow/auth:ro
+      - airflow-auth:/opt/airflow/auth
     depends_on:
       airflow-init: {condition: service_completed_successfully}
     # Reachable as `airflow` so the Caddyfile, the control plane and AIRFLOW_URL keep working:
