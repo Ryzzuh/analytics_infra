@@ -75,12 +75,28 @@ def _account_count(conn: psycopg.Connection) -> int:
     return int(conn.execute("SELECT count(*) FROM accounts").fetchone()[0])
 
 
+def _live_account_count(conn: psycopg.Connection) -> int:
+    """Accounts that still have a subscription capable of changing.
+
+    Deliberately not count(*) FROM accounts. A cancelled account keeps its row forever, so
+    counting that table reports a healthy population long after every subscription has absorbed
+    into `cancelled` -- which is terminal in TRANSITIONS. That is how this source drained to a
+    single live subscription while still reporting 500 accounts.
+    """
+    return int(
+        conn.execute(
+            "SELECT count(DISTINCT account_id) FROM subscriptions WHERE status <> 'cancelled'"
+        ).fetchone()[0]
+    )
+
+
 def run(
     *,
     dsn: str,
     accounts: int,
     interval: float,
     transitions_per_tick: int,
+    signups_per_tick: int,
     seat_change_rate: float,
     erasure_rate: float,
     heartbeat_seconds: float,
@@ -127,8 +143,9 @@ def run(
             stats["signups"] += 1
 
     log.info(
-        "steady state: %d accounts, %.1fs tick, %d transitions/tick",
+        "steady state: %d accounts (%d live), %.1fs tick, %d transitions/tick",
         _account_count(conn),
+        _live_account_count(conn),
         interval,
         transitions_per_tick,
     )
@@ -154,9 +171,17 @@ def run(
                 )
                 stats["seat_changes"] += 1
 
-        # Signups replace erased accounts and keep the population near target, so a long run
-        # does not slowly empty the source.
-        if _account_count(conn) < accounts:
+        # Signups replace churned accounts as well as erased ones, which is what keeps the
+        # live base from draining. Gating on the *account* count pinned the population at
+        # target forever -- cancelled accounts still occupy a row -- so the only thing that
+        # ever freed a slot was a hard erasure, and the modelled customer base decayed to
+        # nothing while the table still read 500.
+        #
+        # Capped per tick rather than refilled in one pass: a drained base would otherwise emit
+        # hundreds of inserts into CDC in a single tick, which is a load spike the loader has no
+        # reason to see outside a backfill.
+        deficit = accounts - _live_account_count(conn)
+        for _ in range(min(max(deficit, 0), signups_per_tick)):
             account_id = writer.create_account(
                 effective_at=now, company=f"Account {rng.randrange(10**6, 10**7)}"
             )
@@ -199,6 +224,12 @@ def main() -> None:
         default=int(os.environ.get("SIM_OLTP_TRANSITIONS", 3)),
     )
     parser.add_argument(
+        "--signups-per-tick",
+        type=int,
+        default=int(os.environ.get("SIM_OLTP_SIGNUPS", 5)),
+        help="max new trials per tick while the live base is below target",
+    )
+    parser.add_argument(
         "--seat-change-rate",
         type=float,
         default=float(os.environ.get("SIM_OLTP_SEAT_CHANGE_RATE", 0.05)),
@@ -235,6 +266,7 @@ def main() -> None:
         accounts=args.accounts,
         interval=args.interval,
         transitions_per_tick=args.transitions_per_tick,
+        signups_per_tick=args.signups_per_tick,
         seat_change_rate=args.seat_change_rate,
         erasure_rate=args.erasure_rate,
         heartbeat_seconds=args.heartbeat_seconds,

@@ -14,6 +14,13 @@ from simulator.oltp_main import run
 ACCOUNTS = 6
 
 
+def live_accounts(conn) -> int:
+    """Accounts with a subscription that can still change -- the number that actually matters."""
+    return conn.execute(
+        "SELECT count(DISTINCT account_id) FROM subscriptions WHERE status <> 'cancelled'"
+    ).fetchone()[0]
+
+
 def counts(conn) -> tuple[int, int]:
     accounts = conn.execute("SELECT count(*) FROM accounts").fetchone()[0]
     subscriptions = conn.execute("SELECT count(*) FROM subscriptions").fetchone()[0]
@@ -29,6 +36,7 @@ def test_seeds_a_population_so_cdc_has_a_source(app_pg_uri, app_conn):
         accounts=ACCOUNTS,
         interval=0.0,
         transitions_per_tick=1,
+        signups_per_tick=ACCOUNTS,
         seat_change_rate=0.0,
         erasure_rate=0.0,
         heartbeat_seconds=0.0,
@@ -52,6 +60,7 @@ def test_restart_does_not_reseed(app_pg_uri, app_conn):
         accounts=ACCOUNTS,
         interval=0.0,
         transitions_per_tick=1,
+        signups_per_tick=ACCOUNTS,
         seat_change_rate=0.0,
         erasure_rate=0.0,
         heartbeat_seconds=0.0,
@@ -79,6 +88,7 @@ def test_steady_state_writes_and_heartbeats(app_pg_uri, app_conn):
         accounts=ACCOUNTS,
         interval=0.0,
         transitions_per_tick=2,
+        signups_per_tick=ACCOUNTS,
         seat_change_rate=1.0,  # deterministic: every sampled subscription gets a seat change
         erasure_rate=0.0,
         heartbeat_seconds=0.0,  # beat on every tick
@@ -108,6 +118,7 @@ def test_erasure_hard_deletes_an_account(app_pg_uri, app_conn):
         accounts=ACCOUNTS,
         interval=0.0,
         transitions_per_tick=1,
+        signups_per_tick=ACCOUNTS,
         seat_change_rate=0.0,
         erasure_rate=0.0,
         heartbeat_seconds=0.0,
@@ -122,6 +133,7 @@ def test_erasure_hard_deletes_an_account(app_pg_uri, app_conn):
         accounts=0,  # do not backfill the deleted account, so the drop is observable
         interval=0.0,
         transitions_per_tick=1,
+        signups_per_tick=ACCOUNTS,
         seat_change_rate=0.0,
         erasure_rate=1.0,  # erase on every tick
         heartbeat_seconds=1e6,
@@ -132,3 +144,54 @@ def test_erasure_hard_deletes_an_account(app_pg_uri, app_conn):
 
     assert stats["erasures"] >= 1
     assert counts(app_conn)[0] < seeded
+
+
+def test_churned_accounts_are_replaced_not_just_erased(app_pg_uri, app_conn):
+    """The live base must refill as subscriptions cancel.
+
+    `cancelled` is terminal in TRANSITIONS, so every subscription eventually absorbs there. The
+    signup gate used to compare count(*) FROM accounts against the target -- and a cancelled
+    account keeps its row -- so the gate read "full" forever while the modelled customer base
+    drained to nothing. On the running stack that left 499 of 500 accounts cancelled, which
+    made `is_cancelled` short-circuit the churn band for every account and turned the whole
+    scoring model into dead code.
+
+    Nothing downstream can catch this: the mart was faithfully reporting what the source said.
+    """
+    run(
+        dsn=app_pg_uri,
+        accounts=ACCOUNTS,
+        interval=0.0,
+        transitions_per_tick=1,
+        signups_per_tick=ACCOUNTS,
+        seat_change_rate=0.0,
+        erasure_rate=0.0,
+        heartbeat_seconds=0.0,
+        history_days=0,
+        seed=11,
+        duration=0.0,
+    )
+
+    # Absorb the entire population, exactly as a long run does.
+    app_conn.execute("UPDATE subscriptions SET status = 'cancelled'")
+    app_conn.commit()
+    assert live_accounts(app_conn) == 0
+    assert counts(app_conn)[0] == ACCOUNTS, "the accounts table still reads full"
+
+    stats = run(
+        dsn=app_pg_uri,
+        accounts=ACCOUNTS,
+        interval=0.0,
+        transitions_per_tick=1,
+        signups_per_tick=2,  # capped: a drained base must not refill in a single tick
+        seat_change_rate=0.0,
+        erasure_rate=0.0,
+        heartbeat_seconds=1e6,
+        history_days=0,
+        seed=19,
+        duration=0.3,
+    )
+
+    assert stats["signups"] >= 1, "no replacement signups; the live base stays at zero forever"
+    assert live_accounts(app_conn) >= 1
+    assert live_accounts(app_conn) <= ACCOUNTS, "refilled past target"

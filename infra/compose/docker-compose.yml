@@ -434,6 +434,10 @@ services:
       SIM_ACCOUNTS: "${SIM_ACCOUNTS:-500}"
       SIM_OLTP_INTERVAL: "${SIM_OLTP_INTERVAL:-5}"
       SIM_OLTP_TRANSITIONS: "${SIM_OLTP_TRANSITIONS:-3}"
+      # Max replacement trials per tick while the live base is below SIM_ACCOUNTS. Capped so a
+      # drained population refills over minutes instead of firing hundreds of inserts into CDC
+      # in one tick.
+      SIM_OLTP_SIGNUPS: "${SIM_OLTP_SIGNUPS:-5}"
       SIM_OLTP_HISTORY_DAYS: "${SIM_OLTP_HISTORY_DAYS:-0}"
 
   billing-mock:
