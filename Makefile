@@ -9,6 +9,12 @@
 # wrong directory. Only passed when the file exists, since compose errors on a missing one.
 ENV_FILE := $(wildcard .env)
 COMPOSE := docker compose $(if $(ENV_FILE),--env-file $(ENV_FILE)) -f infra/compose/docker-compose.yml
+
+# Tearing down and reporting must cover every service, however the stack was started.
+# Without the profile, compose does not know the `full` services exist: `make down` after
+# `make up-full` left eleven containers behind — Prometheus, Grafana, Caddy, the exporters —
+# and `make ps` did not list them, so the stack looked stopped while a third of it was not.
+COMPOSE_ALL := $(COMPOSE) --profile full
 UV := uv
 
 .DEFAULT_GOAL := help
@@ -62,16 +68,16 @@ up-full: ## Core stack plus console/monitoring extras
 	$(COMPOSE) --profile full up -d --build
 
 down: ## Stop the stack, keep data
-	$(COMPOSE) down
+	$(COMPOSE_ALL) down
 
 nuke: ## Stop the stack and delete all volumes
-	$(COMPOSE) down -v
+	$(COMPOSE_ALL) down -v
 
 logs: ## Tail logs (S=service to filter)
 	$(COMPOSE) logs -f $(S)
 
 ps: ## Show container status
-	$(COMPOSE) ps
+	$(COMPOSE_ALL) ps -a
 
 ddl: ## Re-apply warehouse DDL (idempotent)
 	$(COMPOSE) run --rm warehouse-init

@@ -213,3 +213,17 @@ def test_no_repo_file_is_bind_mounted_on_its_own():
             if source.startswith(".") and (root / source).resolve().is_file():
                 offenders.append(f"{name}: {source}")
     assert not offenders, f"single-file bind mounts break on the next git pull: {offenders}"
+
+
+def test_teardown_covers_the_services_up_full_starts():
+    """`down` has to know about the same services `up-full` does.
+
+    Compose only acts on services in the profiles it is told about, so `make down` after
+    `make up-full` left eleven containers behind — Prometheus, Grafana, Caddy, every exporter —
+    while reporting success. `make ps` hid them for the same reason, so the stack looked stopped
+    when a third of it was merely not mentioned.
+    """
+    makefile = (REPO / "Makefile").read_text()
+    for target in ("down:", "nuke:", "ps:"):
+        body = makefile.split(f"\n{target}")[1].split("\n\n")[0]
+        assert "COMPOSE_ALL" in body, f"`{target[:-1]}` ignores the full profile"
