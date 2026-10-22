@@ -72,7 +72,13 @@ def payload_for(row: dict[str, Any]) -> dict[str, Any]:
     """
     return {
         "account_id": row["account_id"],
-        "churn_score": row["churn_score"],
+        # int(), because the mart stores this as `numeric` and psycopg hands back a Decimal.
+        # httpx serialises with the stdlib encoder and no `default=`, so a Decimal here raises
+        # TypeError inside build_request — before any HTTP call, so there is no status code, no
+        # retry and nothing written to ops.reverse_etl_sync_state. The run simply dies on the
+        # first account. The destination declares this field as an int (app_api.Insight), so
+        # narrowing it at the boundary is the contract, not a workaround.
+        "churn_score": int(row["churn_score"]),
         "churn_band": row["churn_band"],
         "score_version": row["score_version"],
         "reasons": row["reasons"],

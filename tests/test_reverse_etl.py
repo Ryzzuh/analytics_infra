@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import httpx
 import pytest
 from reverse_etl import idempotency_key, payload_for, sync_account_health
-from reverse_etl.sync import SyncFailed, payload_hash
+from reverse_etl.sync import SyncFailed, _candidates, payload_hash
 
 NOW = datetime(2026, 9, 16, 3, 0, tzinfo=UTC)
 AS_OF = date(2026, 9, 15)
@@ -22,7 +23,10 @@ def health_mart(conn):
         """
         CREATE TABLE marts.mart_account_health (
             account_id bigint PRIMARY KEY,
-            churn_score integer,
+            -- numeric, not integer: this mirrors what dbt actually builds. Declaring it
+            -- `integer` here let every test pass against a Decimal-free payload while all
+            -- nine scheduled runs died on `Object of type Decimal is not JSON serializable`.
+            churn_score numeric,
             churn_band text,
             score_version text,
             reasons jsonb,
@@ -231,3 +235,22 @@ def test_the_payload_is_the_documented_contract(conn, health_mart):
         "reasons": ["usage_drop", "past_due"],
         "as_of_date": "2026-09-15",
     }
+
+
+def test_the_payload_survives_the_encoder_httpx_uses(conn, health_mart):
+    """payload_for's output must be JSON-encodable by the stdlib encoder, unaided.
+
+    httpx builds the body with `json.dumps(...)` and no `default=`, inside build_request — so an
+    un-encodable value raises before the request is made. That is the worst shape of failure
+    here: no status code to classify, so the error taxonomy never sees it, nothing recorded in
+    ops.reverse_etl_sync_state, and the run dies on the first account rather than tolerating a
+    bad one. payload_hash is no guard either, since it passes `default=str` and will happily
+    hash a Decimal the wire cannot carry.
+    """
+    health_mart(1, score=62, band="critical", reasons=("usage_drop",))
+    row = next(iter(_candidates(conn)))
+
+    assert isinstance(row["churn_score"], Decimal), (
+        "fixture no longer mirrors the dbt mart; this test is not exercising the real type"
+    )
+    json.dumps(payload_for(row))  # the assertion: raises TypeError if a Decimal survives
