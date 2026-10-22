@@ -28,8 +28,9 @@ the chaos scenarios that prove the failure paths behave.
 
 ```bash
 make install         # uv workspace
-make test            # 165 fast tests, ~2 min (embedded Postgres, incl. logical replication)
-make test-all        # + 27 that invoke dbt for real, ~4 min
+make test            # 231 fast tests, ~25s (embedded Postgres, incl. logical replication)
+make test-all        # + 30 that invoke dbt for real, ~5 min
+make test-db-stop    # stop the embedded Postgres servers, after a run is killed outright
 make test-alerts     # alert rule unit tests (promtool) + Alertmanager config check
 make infra-check     # terraform validate/fmt, caddy validate, actionlint, secrets check
 make cost            # what the current infrastructure configuration costs per month
@@ -41,7 +42,14 @@ make up              # core stack (~4 GB): Redpanda, warehouse, Airflow, collect
 Then: Airflow at http://localhost:8080, collector at http://localhost:8000,
 warehouse on `localhost:5433` (`warehouse`/`warehouse`).
 
-`make up-full` adds the Redpanda console. `make nuke` removes volumes.
+`make up` is 22 services; `make up-full` is 33, adding Prometheus, Alertmanager, Grafana and
+its dashboards, Caddy, the Redpanda console and the container-health exporter. `make nuke`
+removes volumes.
+
+Through Caddy, once `DOMAIN` is set in `.env` to a name — not an IP, because TLS SNI cannot
+carry one: the Console at `/`, the product page at `/app`, dashboards at `/grafana`, Airflow at
+`/airflow`. Everything that changes state sits behind the demo passcode, including event
+ingestion at `/v1/events`; everything that only reports state is open.
 
 ## What M1 proves
 
@@ -91,13 +99,27 @@ defects found in this project lived precisely in the gap.
 | The four chaos scenarios, inject and recover | `docs/incidents/01`–`04`, with the observed numbers |
 | Deterministic replay across a whole topic | 384 tasks replayed: row count held, 0 duplicate offsets |
 | Golden snapshot and restore | Run end to end: `docs/runbooks/golden-restore.md` |
+| Container state, healthchecks, restarts and OOM kills | The Container health dashboard, which read them off the Docker API |
+| Anything reachable only through Caddy — the Console, the product page, `/grafana` | Requested over HTTPS and checked for the expected status, including a `401` without the passcode |
+| Whether a container can actually *start* with the mounts and config it is given | Deploy, then container state and restart count |
 | The live Hetzner instance | Not yet created; `terraform apply` is a billable human decision |
 
-Two of those gaps have since been narrowed, because the failure was reducible to a test:
-`tests/test_connector_topics.py` asserts the connector's table list against the topics
-`redpanda-init` creates (a mismatch let the connector report `RUNNING` while every produce
-failed), and `tests/test_fixture_teardown.py` asserts the suite stops the Postgres servers it
-starts. Where a container failure *can* be pulled back into the suite, it should be.
+Some of those gaps have since been narrowed, because the failure turned out to be reducible to
+a test. `tests/test_connector_topics.py` asserts the connector's table list against the topics
+`redpanda-init` creates — a mismatch let the connector report `RUNNING` while every produce
+failed. The same file now also fails on any single-file bind mount, because `git` replaces files
+rather than editing them, so such a mount survives exactly until the next pull that touches it
+and then takes the container down. `tests/test_fixture_teardown.py` asserts the suite stops the
+Postgres servers it starts. Where a container failure *can* be pulled back into the suite, it
+should be.
+
+What stays out of reach is the last row of that table, and it is worth being precise about why.
+CI cannot tell whether a container *starts*. The Airflow credential work is the clearest case:
+the suite proves the control plane mints a token, replaces an expired one on a 401, and retries
+a bad password exactly once — all true, all green, while the api-server crash-looped four times
+on a mount it could not open. Two of this project's longest debugging sessions were spent on
+configuration that every test agreed with. A green pipeline means the code is right about the
+things it was asked about; it says nothing about whether the thing runs.
 
 Alongside those: the collector's contract (envelope-only validation, account-keyed
 partitioning, no ack without a broker ack) in
@@ -134,6 +156,7 @@ load exactly once.
 | `platform/drift/` | Schema drift: what the payloads look like now vs before, and what breaks |
 | `services/control_plane/` | The Console's API: status, pipeline runs, chaos, reset, locking |
 | `console/` | The Console itself (SvelteKit, static) |
+| `services/container_exporter/` | Container state, healthchecks, restarts and OOM kills, from the Docker API |
 | `docs/incidents/` | One write-up per chaos scenario: timeline, cost, recovery |
 | `infra/monitoring/` | Prometheus rules **and their unit tests**, Alertmanager, dashboards |
 | `infra/terraform/` | The live instance: server, volume, firewall, cloud-init, cost output |
