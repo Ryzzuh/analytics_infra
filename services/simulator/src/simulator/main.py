@@ -194,7 +194,16 @@ def run(
     interval = 1.0 / rate if rate > 0 else 0.0
     next_tick = time.monotonic()
 
-    log.info("simulating %d accounts at %.1f events/s -> %s", accounts, rate, collector_url)
+    # len(population), not the configured count: those are different numbers whenever the
+    # source is the database, and printing the configured one is how a generator emitting for
+    # a population it had invented still looked correct in the logs.
+    log.info(
+        "simulating %d accounts (%s) at %.1f events/s -> %s",
+        len(population),
+        "from source database" if conn is not None else "SYNTHETIC ids 1..N",
+        rate,
+        collector_url,
+    )
     while duration is None or time.monotonic() - started < duration:
         if conn is not None and time.monotonic() - last_refresh >= refresh_seconds:
             # Signups and erasures move the population continuously, so a list read once at

@@ -133,6 +133,7 @@ def catch_up_history(
     accounts: int = 2000,
     live_rate: float = 20.0,
     seed: int = 42,
+    account_pool: list[Account] | None = None,
 ) -> dict[str, int]:
     """Fill the gap a restore leaves behind (SPEC.md §9.3).
 
@@ -152,6 +153,7 @@ def catch_up_history(
         start=start,
         end=end,
         accounts=accounts,
+        account_pool=account_pool,
         profile=DensityProfile(baseline_rate=live_rate, peak_rate=live_rate, ramp_days=0),
         seed=seed,
         step=timedelta(minutes=15),

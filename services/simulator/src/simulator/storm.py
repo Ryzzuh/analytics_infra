@@ -15,7 +15,10 @@ import random
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import psycopg
 from loader.kafka_sink import KafkaMessageSink
+
+from .main import Account, build_accounts, load_accounts
 
 log = logging.getLogger("simulator.storm")
 
@@ -32,21 +35,39 @@ POISON = [
 
 
 def late_duplicate_storm(
-    sink, *, events: int, days_late: int, duplicate_rate: float, seed: int = 99
+    sink,
+    *,
+    events: int,
+    days_late: int,
+    duplicate_rate: float,
+    seed: int = 99,
+    accounts: list[Account] | None = None,
 ) -> dict[str, int]:
-    """Devices coming back online: old events, many of them sent twice."""
+    """Devices coming back online: old events, many of them sent twice.
+
+    `accounts` must come from the source database. Hard-coding randint(1, 500) here made the
+    storm manufacture history for accounts that may not exist -- the same defect as the live
+    and backfill generators, and the one that left brand-new accounts holding usage they never
+    had. A storm is run precisely when the pipeline is already under strain, so it is the worst
+    moment to be injecting rows the warehouse cannot reconcile.
+    """
     rng = random.Random(seed)
     now = datetime.now(UTC)
     produced = duplicates = 0
 
+    if not accounts:
+        log.warning("no account pool: storming SYNTHETIC ids 1..500")
+    pool = accounts or build_accounts(500, seed)
+
     for _ in range(events):
+        account = rng.choice(pool)
         event_time = now - timedelta(
             days=rng.uniform(0.5, days_late), seconds=rng.uniform(0, 86400)
         )
         body = {
             "event_id": str(uuid4()),
-            "account_id": rng.randint(1, 500),
-            "user_id": rng.randint(1000, 9999),
+            "account_id": account.account_id,
+            "user_id": rng.choice(account.users) if account.users else account.account_id * 1000,
             "event_type": "feature_invoked",
             "event_time": event_time.isoformat(),
             # Received now, having happened days ago: that gap is what the cutoff measures.
@@ -82,8 +103,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--days-late", type=int, default=3)
     parser.add_argument("--duplicate-rate", type=float, default=0.3)
     parser.add_argument("--poison", action="store_true")
+    parser.add_argument(
+        "--app-dsn",
+        default=os.environ.get("APP_DSN"),
+        help="source database; the storm targets only accounts that exist in it",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    pool = None
+    if args.app_dsn:
+        with psycopg.connect(args.app_dsn) as conn:
+            pool = load_accounts(conn, seed=99)
+        if not pool:
+            log.error("no accounts in %s; refusing to storm an invented population", args.app_dsn)
+            return 1
+        log.info("storming %d real accounts", len(pool))
 
     sink = KafkaMessageSink(args.bootstrap)
     result = (
@@ -94,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
             events=args.events,
             days_late=args.days_late,
             duplicate_rate=args.duplicate_rate,
+            accounts=pool,
         )
     )
     log.info("storm complete: %s", result)
