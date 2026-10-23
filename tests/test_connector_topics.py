@@ -227,3 +227,21 @@ def test_teardown_covers_the_services_up_full_starts():
     for target in ("down:", "nuke:", "ps:"):
         body = makefile.split(f"\n{target}")[1].split("\n\n")[0]
         assert "COMPOSE_ALL" in body, f"`{target[:-1]}` ignores the full profile"
+
+
+def test_the_event_generator_is_pointed_at_the_source_database():
+    """The product stream and the OLTP source must agree on who the customers are.
+
+    `load_accounts` existing is not the same as the running service using it. Without APP_DSN
+    the generator falls back to inventing ids 1..SIM_ACCOUNTS -- which is the configuration
+    that emitted events for accounts that had never been created, gave every account past that
+    range no events at all, and left the churn model scoring new customers as critical risk on
+    a history that was not theirs.
+    """
+    simulator = compose_config()["services"]["simulator"]
+    assert "APP_DSN" in simulator["environment"], (
+        "without APP_DSN the generator invents account ids with no reference to the source"
+    )
+    assert "postgres-app" in simulator["depends_on"], (
+        "it reads the account list at startup, so the source has to be up first"
+    )

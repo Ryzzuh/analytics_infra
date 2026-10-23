@@ -386,11 +386,19 @@ services:
       args: {SERVICE: simulator, PLATFORM_DEPS: "./platform/loader[kafka]"}
     depends_on:
       collector: {condition: service_healthy}
+      postgres-app: {condition: service_healthy}
     command: ["simulator"]
     environment:
       COLLECTOR_URL: http://collector:8000
-      SIM_ACCOUNTS: "${SIM_ACCOUNTS:-500}"
       SIM_RATE: "${SIM_RATE:-2}"
+      # The product stream emits only for accounts that exist in the OLTP source. Without this
+      # the generator invented ids 1..SIM_ACCOUNTS, so events landed against accounts that had
+      # never been created while every account past that range got none -- which the churn
+      # model read as dormancy and scored as critical risk.
+      APP_DSN: postgresql://app:app@postgres-app:5432/app
+      SIM_ACCOUNT_REFRESH: "${SIM_ACCOUNT_REFRESH:-60}"
+      # Only used if APP_DSN is unset; kept so the service can still run standalone.
+      SIM_ACCOUNTS: "${SIM_ACCOUNTS:-500}"
 
   # Registering the connector was documented in infra/connect/README.md and done by hand, which
   # meant `make up` produced a stack with no CDC at all: slot absent, topics absent, change log
