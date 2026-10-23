@@ -16,7 +16,8 @@ from uuid import uuid4
 
 import pytest
 from conftest import TOPIC
-from loader.run import load_partition
+from loader.run import ensure_partition, load_partition
+from loader.targets import cdc_target
 from loader.testing import event_bytes
 
 REPO = Path(__file__).resolve().parents[1]
@@ -114,3 +115,81 @@ def test_staging_is_incremental_and_idempotent(conn, source, dbt_env):
 
     count = conn.execute("SELECT count(*) FROM staging.stg_product_events").fetchone()[0]
     assert count == 4
+
+
+def _insert_account_change(conn, *, account_id: int, created_at: datetime) -> None:
+    """One accounts row in the raw change log, shaped as the loader writes it.
+
+    `raw.cdc_changes` is partitioned on loaded_date and carries an FK to ops.load_ledger, so
+    this reuses the ledger entry the product-event load already created rather than inventing
+    one — the point here is the account's created_at, not the CDC path.
+    """
+    ledger_id = conn.execute("SELECT min(id) FROM ops.load_ledger").fetchone()[0]
+    # raw.cdc_changes is partitioned by range on loaded_date and the loader creates each day's
+    # partition on demand, so a hand-written insert has to do the same.
+    ensure_partition(conn, cdc_target(), datetime.now(UTC).date())
+    conn.execute(
+        """
+        INSERT INTO raw.cdc_changes
+            (loaded_date, topic, partition_id, kafka_offset, ledger_id, source_table, op, pk,
+             account_id, after, source_lsn, source_ts, effective_at, is_snapshot, kafka_ts,
+             loaded_at, source_path)
+        VALUES (current_date, 'cdc.app.public.accounts', 0, %s, %s, 'accounts', 'c', %s,
+                %s,
+                jsonb_build_object('id', %s::text, 'company_name', 'Acct', 'country', 'AU',
+                                   'created_at', %s::text),
+                %s, now(), %s, false, now(), now(), 'live')
+        """,
+        (account_id, ledger_id, str(account_id), account_id, account_id,
+         created_at.isoformat(), account_id, created_at),
+    )
+
+
+def test_an_event_predating_its_account_is_withheld(conn, source, dbt_env):
+    """A contradiction the source cannot produce.
+
+    Three generators invented account ids from hard-coded ranges, so a history replay wrote
+    events for accounts created weeks later. Those accounts then arrived in the warehouse
+    holding usage they never had and no recent activity to match it, and the usage-collapse
+    rule read the gap as a customer who had stopped using the product -- scoring brand-new
+    accounts as critical churn risk on day one.
+    """
+    now = datetime.now(UTC)
+    born = now - timedelta(days=1)
+
+    source.produce(TOPIC, 0, event_bytes(account_id=4242, event_time=now))
+    source.produce(TOPIC, 0, event_bytes(account_id=4242, event_time=born - timedelta(days=30)))
+    load_partition(conn, source, topic=TOPIC, partition_id=0, dag_run_id="run-pre")
+    _insert_account_change(conn, account_id=4242, created_at=born)
+    conn.commit()
+
+    dbt("build", "--select", "stg_product_events", env=dbt_env)
+
+    kept = conn.execute(
+        "SELECT count(*) FROM staging.stg_product_events WHERE account_id = 4242"
+    ).fetchone()[0]
+    assert kept == 1, "the event dated before the account existed must not be staged"
+
+
+def test_an_unknown_account_is_not_withheld(conn, source, dbt_env):
+    """Absence of a CDC row is not evidence of anything.
+
+    The first version of this rule required a matching account, which couples two load paths
+    that have no ordering guarantee: a lagging CDC stream would withhold every product event.
+    Combined with the incremental lookback, anything that aged out of the window would never be
+    reconsidered -- real events destroyed by a transient ordering difference. An erased account
+    produces the same shape, and its past usage is exactly what the churn signals are computed
+    from, so those events must survive too.
+    """
+    source.produce(TOPIC, 0, event_bytes(account_id=9999, event_time=datetime.now(UTC)))
+    load_partition(conn, source, topic=TOPIC, partition_id=0, dag_run_id="run-unknown")
+    conn.commit()
+
+    dbt("build", "--select", "stg_product_events", env=dbt_env)
+
+    kept = conn.execute(
+        "SELECT count(*) FROM staging.stg_product_events WHERE account_id = 9999"
+    ).fetchone()[0]
+    assert kept == 1, (
+        "withholding on an unknown account lets a lagging CDC load silently drop real events"
+    )

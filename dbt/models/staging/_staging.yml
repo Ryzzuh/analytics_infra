@@ -97,3 +97,18 @@ models:
         tests: [not_null]
       - name: duplicate_copies
         description: How many additional copies of this event arrived. Feeds the dup-rate metric.
+
+  - name: stg_product_events_unreconciled
+    description: >
+      Events dated before the account they name was created — a contradiction the source cannot
+      produce. Unlike the lateness quarantine these are not absorbed by a full refresh: they are
+      not true facts, so no decision about closed periods should admit them. Events whose
+      account is simply unknown are NOT withheld; absence of a CDC row proves nothing.
+    columns:
+      - name: event_id
+        tests: [not_null, unique]
+      - name: reason
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['event predates account']
